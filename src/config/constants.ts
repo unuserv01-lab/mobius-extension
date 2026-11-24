@@ -14,6 +14,12 @@ export const TEMP_CLEANUP_ALARM_MINUTES = 5; // chrome.alarms cadence (P: memory
 export const CLOUD_ESCALATION_MIN_CHARS = 2000; // long text -> cloud candidate
 export const MAX_ONDEVICE_CHARS = 8000; // truncate context sent to Nano
 
+// Engine selection (Workstream J, v6). Default 'auto' = today's behavior.
+export const DEFAULT_ENGINE = 'auto' as const;
+export const DEFAULT_LOCAL_SERVER_BASE_URL = 'http://localhost:11434';
+export const DEFAULT_LOCAL_SERVER_MODEL = 'llama3.1'; // assumption: pull it first (`ollama pull llama3.1`)
+export const DEFAULT_LOCAL_SERVER_TIMEOUT_MS = 60_000; // 60 s
+
 // chrome.storage.local keys (all local, never synced to any cloud).
 export const STORAGE_KEYS = {
   permissions: 'mobius_permissions',

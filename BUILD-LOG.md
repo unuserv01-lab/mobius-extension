@@ -121,3 +121,136 @@ saat build v1.
 format skill belum ada di extension; `<all_urls>` di manifest vs klaim "minimal
 permissions"; App Check enforcement JANGAN dinyalakan dulu (debug token masih placeholder;
 Android sengaja Unenforced).
+
+## 24 Nov 2026 — v6, Workstream J: Multi-engine (AIRouter gains engine options)
+
+**Yang dibangun:**
+- **Engine baru: Local Server** — `src/ai/LocalServerAI.ts` (baru). POST
+  `{baseUrl}/api/generate` gaya Ollama (`{ model, prompt, stream: false }`),
+  timeout 60 detik (AbortController). Error jujur, tidak pernah fallback
+  diam-diam: server tidak jalan → "Local server unreachable at … — is Ollama
+  running? Start it with `ollama serve`, pull the model…"; timeout → pesan
+  timeout; HTTP non-200 → status + body; respons kosong → pesan kosong.
+- **Seleksi engine** — setting `engine` di `mobius_settings` (storage yang
+  sama dengan PermissionManager/Settings, `chrome.storage.local`), nilai:
+  `"auto"` (default — perilaku lama: Nano dulu, cloud kalau diizinkan),
+  `"nano"` (Nano saja), `"cloud"` (cloud Gemini saja, tetap butuh "Allow
+  Cloud AI" ON), `"local"` (local server saja). Default `"auto"` → tidak ada
+  yang berubah untuk pengguna lama.
+- **Settings UI** — `src/ui/SettingsView.ts`: dropdown engine + field base URL
+  server lokal + nama model + tombol "Save engine settings". Fungsional saja,
+  tanpa redesign. Catatan penting: handler Save TTL lama menimpa seluruh
+  `mobius_settings` — diperbaiki jadi merge (`saveSettings()`), supaya simpan
+  TTL tidak menghapus setting engine (dan sebaliknya).
+- **Routing log** — setiap pilihan engine + setiap hasil panggilan local
+  server dicatat lewat `AIRouter.log()` yang sama (Router Log / History
+  menampilkan `LOCAL SERVER` sebagai badge baru di `RouterLogView.ts`).
+  Provenance di `SubAgent.ts` juga membedakan `local-server`.
+- **Rantai fallback tetap jujur:** `auto` = Nano → cloud (kalau diizinkan) →
+  extractive summary lokal. Engine eksplisit (`nano`/`cloud`/`local`) TIDAK
+  PERNAH pindah diam-diam ke engine lain: kalau engine pilihan gagal, hanya
+  extractive summary lokal yang dicoba (dilabeli), kalau itu pun tidak bisa →
+  error jujur. Local server BUKAN fallback senyap.
+- **Tipe** — `src/core/types.ts`: `EngineChoice`, `LocalServerSettings`,
+  `TaskResult.engine` / `RouterDecision.engine` + `'local-server'`;
+  `src/config/constants.ts`: `DEFAULT_ENGINE='auto'`,
+  `DEFAULT_LOCAL_SERVER_BASE_URL='http://localhost:11434'`,
+  `DEFAULT_LOCAL_SERVER_MODEL='llama3.1'`, timeout 60.000 ms. Model cloud
+  tetap `gemini-3.8-flash` (tidak diubah).
+
+**Batasan jujur (didokumentasikan di kode + Settings):** tidak ada model yang
+bisa jalan murni di dalam browser. "Local server" adalah program di laptop
+Tuan (mis. Ollama) — extension hanya memanggilnya lewat HTTP. Manifest sudah
+punya `host_permissions: <all_urls>`, jadi fetch ke `http://localhost:11434`
+dari service worker diizinkan.
+
+**Cara pakai (Ollama) di laptop Tuan:**
+1. Install Ollama, jalankan `ollama serve`, lalu `ollama pull llama3.1`
+   (model default adalah ASUMSI — Ollama tidak membawa model bawaan; kalau
+   pakai model lain, ubah nama model di Settings).
+2. Di Side Panel → Settings → AI Engine → pilih "Local server only",
+   pastikan base URL `http://localhost:11434` dan model `llama3.1`, Save.
+3. Setiap jawaban dicatat di Router Log sebagai `LOCAL SERVER` (atau
+   `LOCAL FALLBACK` + alasan jelas kalau server mati).
+
+**Yang TIDAK disentuh:** `src/ai/OnDeviceAI.ts` (bug 24 Nov tetap terperbaiki:
+`{ mode: InferenceMode.ONLY_ON_DEVICE }`, tanpa cast di sekitar
+`getGenerativeModel` — diverifikasi, file tidak diubah), `src/config/firebase.ts`
+(config Firebase tetap), App Check enforcement tetap OFF (debug token +
+reCAPTCHA masih placeholder), repo Android tidak disentuh, tidak ada
+secret/token yang di-commit.
+
+**Verifikasi build — ✅ SUKSES (`npm run build`, 24 Nov):**
+- `tsc --noEmit` bersih + 3 bundle Vite: background.js 243,59 kB,
+  content.js 10,90 kB, side panel 229,77 kB.
+- `dist/` mengandung kode engine baru: `localhost:11434` + `/api/generate` +
+  `ollama serve` ada di background.js dan side-panel bundle; keempat nilai
+  engine (`auto`/`nano`/`cloud`/`local`) ada di side-panel bundle.
+- `gemini-3.8-flash` tetap satu-satunya model cloud; `only_on_device` ada.
+  String `gemini-nano` di dist HANYA muncul di dalam teks pesan error
+  (URL flag `chrome://flags/#prompt-api-for-gemini-nano` dan "enable Gemini
+  Nano") — TIDAK PERNAH sebagai argumen model ke `getGenerativeModel`.
+
+**Belum dites live (butuh Chrome di laptop Tuan):** panggilan nyata ke Ollama
+(server jalan / server mati / timeout / nama model salah), tampilan dropdown
+engine di Settings, dan badge `LOCAL SERVER` di Router Log. Tes live di VM
+tetap tidak mungkin (browser read-only, seperti 24 Nov 08:57).
+
+## 24 Nov 2026 — v6: Laptop bridge server (Workstream K, part 1)
+
+**Keputusan desain (dicatat supaya Tuan bisa koreksi):** extension Chrome
+TIDAK BISA menjalankan shell atau menyentuh file laptop langsung (batas
+keamanan Chrome — tidak ada `child_process`, tidak ada akses fs ke disk
+di luar profil browser). Maka bridge adalah program server kecil yang
+berjalan DI LAPTOP, di sebelah Chrome, dengan dua peran: (1) membiarkan
+extension menjalankan shell + baca/tulis file laptop lewat HTTP, dan
+(2) menjadi gerbang remote di LAN supaya aplikasi Android bisa menggerakkan
+extension laptop dari HP (HP → bridge → extension mengeksekusi di Chrome →
+hasil kembali ke HP). Client extension dan client Android dibangun agen
+lain; workstream ini HANYA server + dokumentasi API-nya.
+
+**File:** `~/workspace/mobius-extension/bridge/` — `bridge.mjs` (Node
+stdlib SAJA, tanpa dependensi npm — jalan dengan `node bridge.mjs`),
+`README.md`, `TEST-LOG.md`. Tidak ada file di luar `bridge/` yang diubah;
+tidak ada `src/` yang disentuh; Firebase / App Check tidak disentuh.
+
+**API** (semua JSON; semua butuh header `X-Mobius-Token` kecuali `/health`):
+- `GET /health` (tanpa auth) → `{ok, version, time}`
+- `POST /exec {command, args[], cwd?}` → `{stdout, stderr, exitCode, timedOut}`; timeout 30 dtk, kill on timeout
+- `POST /read {path}` → `{content}`; `POST /write {path, content}` → `{bytesWritten}`
+- `POST /task {text, source}` → `202 {accepted, taskId}`; `GET /task/:id` → `{taskId, status: queued|running|done|failed|expired, result?}`
+- `GET /bridge/tasks/next` → extension mengambil tugas tertua (short poll 3–5 dtk, dipilih karena service worker MV3 bisa di-suspend — long-poll tidak bisa diandalkan); `POST /bridge/tasks/:id/result {status: done|failed, result}`
+
+**Keamanan:** token dari env `MOBIUS_BRIDGE_TOKEN` — tanpa token server
+MENOLAK start (tanpa default). Allowlist `/exec` ketat: hanya `git
+status/log/diff/branch` (flag terbatas), `ls`, `cat`, `node --version`,
+`npm --version`, `pwd` — via `spawn()` `shell:false`, tanpa shell
+metacharacter, tanpa pipe/redirect. Ditolak: `rm`, `curl`/`wget`, `git
+push/pull/fetch/clone`, `sh`/`bash`, dan semua yang tidak terdaftar.
+`/read`/`/write` hanya di dalam `--root` (default `~/mobius-bridge`),
+menolak traversal `..` dan symlink yang keluar. Default bind `127.0.0.1`;
+`--lan` bind `0.0.0.0` (LAN/Wi-Fi yang sama saja, JANGAN port-forward —
+tidak ada instruksi port-forwarding di proyek ini, sengaja).
+
+**Start (laptop Tuan):**
+`MOBIUS_BRIDGE_TOKEN=change-me-<token-acak> node bridge.mjs [--lan] [--port 8787] [--root ~/mobius-bridge]`
+(`change-me-...` hanya contoh — JANGAN pakai nilai itu; buat token acak,
+mis. `openssl rand -hex 32`.)
+
+**Tes (24 Nov, Node v24.22.1, token tes palsu `test-token-123`, root
+`/tmp/mobius-test-root`):** 19 cek, semua PASS — `/health`, 401 tanpa
+token, `node --version` + `pwd` diizinkan, `rm`/`curl`/metachar pipe/`git
+push` ditolak 403, `/write`+`/read` di dalam root OK (`bytesWritten: 14`),
+traversal `../../etc/passwd` + `../escape.txt` ditolak 403, round-trip
+tugas lengkap (submit → `queued` → `next` claim → `result done` → `GET`
+`done` + result), poll kedua `{task:null}`, tugas tak dikenal 404.
+Tambahan: `--help` OK, `--lan` bind `0.0.0.0` terverifikasi, `ls -l` OK,
+`git status` di non-repo mengembalikan `exitCode 128` git apa adanya
+(bukan error HTTP). Server tes dimatikan setelah pengujian. Detail di
+`bridge/TEST-LOG.md`.
+
+**Belum dites (butuh laptop + HP Tuan):** round-trip sungguhan HP →
+bridge → extension Chrome → HP; `--lan` dari perangkat lain di Wi-Fi yang
+sama; kill-on-timeout 30 dtk secara live; kedaluwarsa tugas 10 menit
+secara live. Batas jujur: tugas hanya di memori (restart = hilang),
+latensi polling beberapa detik, HTTP tanpa enkripsi (LAN rumah saja).

@@ -7,6 +7,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   const DEFAULT_TEMP_TTL_SECONDS = 15 * 60;
   const TEMP_CLEANUP_ALARM_MINUTES = 5;
   const MAX_ONDEVICE_CHARS = 8e3;
+  const DEFAULT_ENGINE = "auto";
+  const DEFAULT_LOCAL_SERVER_BASE_URL = "http://localhost:11434";
+  const DEFAULT_LOCAL_SERVER_MODEL = "llama3.1";
+  const DEFAULT_LOCAL_SERVER_TIMEOUT_MS = 6e4;
   const STORAGE_KEYS = {
     permissions: "mobius_permissions",
     memory: "mobius_memory",
@@ -160,12 +164,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         const res = await this.sendToTab(tabId, { type: "MOBIUS_INSERT_REPLY", text: draft });
         inserted = Boolean(res == null ? void 0 : res.ok);
       }
+      const engineLabel = gen.engine === "cloud" ? "via Cloud Gemini" : gen.engine === "local-server" ? "via local server" : gen.engine === "local-fallback" ? "via local extractive fallback" : "Locally via Gemini Nano";
       return {
         taskId: this.task.id,
         ok: true,
         engine: gen.engine,
         text: draft,
-        provenance: inserted ? `Done (Processed ${gen.engine === "cloud" ? "via Cloud Gemini" : "Locally via Gemini Nano"}) — draft inserted into WhatsApp Web` : `Done (Processed ${gen.engine === "cloud" ? "via Cloud Gemini" : "Locally via Gemini Nano"}) — draft ready, copy it manually (DOM actions are OFF)`
+        provenance: inserted ? `Done (Processed ${engineLabel}) — draft inserted into WhatsApp Web` : `Done (Processed ${engineLabel}) — draft ready, copy it manually (DOM actions are OFF)`
       };
     }
     /** MVP flow (b): active-page summarizer. */
@@ -192,7 +197,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         ok: true,
         engine: gen.engine,
         text: gen.text.trim(),
-        provenance: `Summary (${gen.engine === "cloud" ? "Cloud Gemini" : gen.engine === "on-device" ? "Gemini Nano on-device" : "local extractive fallback"})`
+        provenance: `Summary (${gen.engine === "cloud" ? "Cloud Gemini" : gen.engine === "on-device" ? "Gemini Nano on-device" : gen.engine === "local-server" ? "local server" : "local extractive fallback"})`
       };
     }
     /** Free-form chat with the current page as context. */
@@ -206,7 +211,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         ok: true,
         engine: gen.engine,
         text: gen.text.trim(),
-        provenance: `Answered (${gen.engine === "cloud" ? "Cloud Gemini" : gen.engine === "on-device" ? "Gemini Nano on-device" : "local extractive fallback"})`
+        provenance: `Answered (${gen.engine === "cloud" ? "Cloud Gemini" : gen.engine === "on-device" ? "Gemini Nano on-device" : gen.engine === "local-server" ? "local server" : "local extractive fallback"})`
       };
     }
     /** P6: destroy the worker — abort + wipe temp data. Called by the Orchestrator. */
@@ -5914,6 +5919,58 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       }
     }
   }
+  async function loadLocalServerConfig() {
+    const data = await chrome.storage.local.get(STORAGE_KEYS.settings);
+    const stored = data[STORAGE_KEYS.settings];
+    return {
+      baseUrl: ((stored == null ? void 0 : stored.localServerBaseUrl) ?? DEFAULT_LOCAL_SERVER_BASE_URL).replace(/\/+$/, ""),
+      model: (stored == null ? void 0 : stored.localServerModel) ?? DEFAULT_LOCAL_SERVER_MODEL,
+      timeoutMs: DEFAULT_LOCAL_SERVER_TIMEOUT_MS
+    };
+  }
+  class LocalServerAI {
+    static async generate(prompt, config) {
+      const cfg = config ?? await loadLocalServerConfig();
+      const url = `${cfg.baseUrl}/api/generate`;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
+      try {
+        let res;
+        try {
+          res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: cfg.model, prompt, stream: false }),
+            signal: controller.signal
+          });
+        } catch (err) {
+          if (err instanceof DOMException && err.name === "AbortError") {
+            return {
+              ok: false,
+              error: `Local server timed out after ${cfg.timeoutMs / 1e3}s at ${cfg.baseUrl} (model "${cfg.model}"). The server may be busy or the model too slow — try a smaller model.`
+            };
+          }
+          return {
+            ok: false,
+            error: `Local server unreachable at ${cfg.baseUrl} — is Ollama running? Start it with \`ollama serve\`, pull the model with \`ollama pull ${cfg.model}\`, and check the base URL in Settings. (No request reached any AI; nothing was sent to the cloud.)`
+          };
+        }
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          return {
+            ok: false,
+            error: `Local server at ${cfg.baseUrl} returned HTTP ${res.status}` + (body ? `: ${body.slice(0, 200)}` : ".") + ` Check the model name ("${cfg.model}" — is it pulled? run \`ollama list\`) and the base URL in Settings.`
+          };
+        }
+        const data = await res.json();
+        const text = typeof data.response === "string" ? data.response.trim() : "";
+        if (!text) return { ok: false, error: `Local server at ${cfg.baseUrl} returned an empty response for model "${cfg.model}".` };
+        return { ok: true, text };
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  }
   async function tryPromptApi(prompt) {
     try {
       const g = globalThis;
@@ -5960,68 +6017,86 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       __publicField(this, "permissions");
       this.permissions = permissions;
     }
+    /** Read the persisted engine choice; unknown/missing values fall back to "auto". */
+    async getEngineChoice() {
+      const data = await chrome.storage.local.get(STORAGE_KEYS.settings);
+      const stored = data[STORAGE_KEYS.settings];
+      const choice = stored == null ? void 0 : stored.engine;
+      return choice === "auto" || choice === "nano" || choice === "cloud" || choice === "local" ? choice : DEFAULT_ENGINE;
+    }
     async generate(taskId, prompt, opts) {
       const cloudAllowed = await this.permissions.isAllowed("cloudAI");
+      const engineChoice = await this.getEngineChoice();
       const started = Date.now();
+      const summary = prompt.slice(0, 80).replace(/\s+/g, " ");
+      const payload = (detail) => `prompt ${prompt.length} chars, ${detail}`;
+      if (engineChoice === "nano") {
+        const nano = await OnDeviceAI.generate(prompt);
+        if (nano.ok) {
+          await this.log({ taskId, taskSummary: summary, engine: "on-device", reason: 'Engine "nano": Gemini Nano on-device (explicit choice).', latencyMs: Date.now() - started, cloudAllowed, payloadSummary: payload("on-device, explicit") });
+          return { ok: true, text: nano.text, engine: "on-device" };
+        }
+        return this.failWithFallback(taskId, summary, prompt, started, cloudAllowed, `Engine "nano" failed: ${nano.error}`, payload("nano failed, no other engine tried"));
+      }
+      if (engineChoice === "cloud") {
+        if (!cloudAllowed) {
+          await this.log({ taskId, taskSummary: summary, engine: "local-fallback", reason: 'Engine "cloud" chosen but "Allow Cloud AI" is OFF — cloud NOT called.', latencyMs: Date.now() - started, cloudAllowed, payloadSummary: payload("cloud not allowed") });
+          const fallback2 = this.extractiveFallback(prompt);
+          if (fallback2) return { ok: true, text: fallback2, engine: "local-fallback" };
+          return { ok: false, error: 'Engine "cloud" is selected but "Allow Cloud AI" is OFF, so MOBIUS did not call the cloud. Enable "Allow Cloud AI" in Settings or switch the engine back to "auto".', engine: "none" };
+        }
+        const cloud2 = await CloudAI.generate(prompt);
+        if (cloud2.ok) {
+          await this.log({ taskId, taskSummary: summary, engine: "cloud", reason: 'Engine "cloud": cloud Gemini (explicit choice).', latencyMs: Date.now() - started, cloudAllowed, payloadSummary: payload("cloud Gemini, explicit") });
+          return { ok: true, text: cloud2.text, engine: "cloud" };
+        }
+        return this.failWithFallback(taskId, summary, prompt, started, cloudAllowed, `Engine "cloud" failed: ${cloud2.error}`, payload("cloud failed, no other engine tried"));
+      }
+      if (engineChoice === "local") {
+        const cfg = await loadLocalServerConfig();
+        const local = await LocalServerAI.generate(prompt, cfg);
+        if (local.ok) {
+          await this.log({ taskId, taskSummary: summary, engine: "local-server", reason: `Engine "local": local server at ${cfg.baseUrl} (model "${cfg.model}", explicit choice).`, latencyMs: Date.now() - started, cloudAllowed, payloadSummary: payload(`local server ${cfg.baseUrl} model ${cfg.model}`) });
+          return { ok: true, text: local.text, engine: "local-server" };
+        }
+        return this.failWithFallback(taskId, summary, prompt, started, cloudAllowed, `Engine "local" failed: ${local.error}`, payload(`local server ${cfg.baseUrl} failed, no other engine tried`));
+      }
       const onDevice = await OnDeviceAI.generate(prompt);
       if (onDevice.ok) {
-        await this.log({
-          taskId,
-          taskSummary: prompt.slice(0, 80).replace(/\s+/g, " "),
-          engine: "on-device",
-          reason: "Default intelligence (P3): Gemini Nano on-device.",
-          latencyMs: Date.now() - started,
-          cloudAllowed,
-          payloadSummary: `prompt ${prompt.length} chars, on-device`
-        });
+        await this.log({ taskId, taskSummary: summary, engine: "on-device", reason: "Default intelligence (P3): Gemini Nano on-device.", latencyMs: Date.now() - started, cloudAllowed, payloadSummary: payload("on-device") });
         return { ok: true, text: onDevice.text, engine: "on-device" };
       }
       const nanoError = onDevice.error;
-      {
-        if (!cloudAllowed) {
-          await this.log({
-            taskId,
-            taskSummary: prompt.slice(0, 80).replace(/\s+/g, " "),
-            engine: "local-fallback",
-            reason: `Nano unavailable (${nanoError}); cloud NOT called — "Allow Cloud AI" is OFF.`,
-            latencyMs: Date.now() - started,
-            cloudAllowed,
-            payloadSummary: `prompt ${prompt.length} chars, no cloud call`
-          });
-          const fallback2 = this.extractiveFallback(prompt);
-          if (fallback2) return { ok: true, text: fallback2, engine: "local-fallback" };
-          return {
-            ok: false,
-            error: `${nanoError} Cloud AI is OFF, so MOBIUS did not call the cloud. Enable "Allow Cloud AI" in Settings to let MOBIUS escalate, or enable Gemini Nano at chrome://flags/#prompt-api-for-gemini-nano.`,
-            engine: "none"
-          };
-        }
-        const cloud = await CloudAI.generate(prompt);
-        if (cloud.ok) {
-          await this.log({
-            taskId,
-            taskSummary: prompt.slice(0, 80).replace(/\s+/g, " "),
-            engine: "cloud",
-            reason: `Escalated: Nano unavailable (${nanoError}) and cloud is allowed.`,
-            latencyMs: Date.now() - started,
-            cloudAllowed,
-            payloadSummary: `prompt ${prompt.length} chars -> cloud Gemini`
-          });
-          return { ok: true, text: cloud.text, engine: "cloud" };
-        }
-        await this.log({
-          taskId,
-          taskSummary: prompt.slice(0, 80).replace(/\s+/g, " "),
-          engine: "local-fallback",
-          reason: `Both engines failed — Nano: ${nanoError}; Cloud: ${cloud.error}.`,
-          latencyMs: Date.now() - started,
-          cloudAllowed,
-          payloadSummary: `prompt ${prompt.length} chars, both engines failed`
-        });
-        const fallback = this.extractiveFallback(prompt);
-        if (fallback) return { ok: true, text: fallback, engine: "local-fallback" };
-        return { ok: false, error: `On-device failed (${nanoError}); cloud failed (${cloud.error}).`, engine: "none" };
+      if (!cloudAllowed) {
+        await this.log({ taskId, taskSummary: summary, engine: "local-fallback", reason: `Nano unavailable (${nanoError}); cloud NOT called — "Allow Cloud AI" is OFF.`, latencyMs: Date.now() - started, cloudAllowed, payloadSummary: payload("no cloud call") });
+        const fallback2 = this.extractiveFallback(prompt);
+        if (fallback2) return { ok: true, text: fallback2, engine: "local-fallback" };
+        return {
+          ok: false,
+          error: `${nanoError} Cloud AI is OFF, so MOBIUS did not call the cloud. Enable "Allow Cloud AI" in Settings to let MOBIUS escalate, or enable Gemini Nano at chrome://flags/#prompt-api-for-gemini-nano.`,
+          engine: "none"
+        };
       }
+      const cloud = await CloudAI.generate(prompt);
+      if (cloud.ok) {
+        await this.log({ taskId, taskSummary: summary, engine: "cloud", reason: `Escalated: Nano unavailable (${nanoError}) and cloud is allowed.`, latencyMs: Date.now() - started, cloudAllowed, payloadSummary: payload("-> cloud Gemini") });
+        return { ok: true, text: cloud.text, engine: "cloud" };
+      }
+      await this.log({ taskId, taskSummary: summary, engine: "local-fallback", reason: `Both engines failed — Nano: ${nanoError}; Cloud: ${cloud.error}.`, latencyMs: Date.now() - started, cloudAllowed, payloadSummary: payload("both engines failed") });
+      const fallback = this.extractiveFallback(prompt);
+      if (fallback) return { ok: true, text: fallback, engine: "local-fallback" };
+      return { ok: false, error: `On-device failed (${nanoError}); cloud failed (${cloud.error}).`, engine: "none" };
+    }
+    /**
+     * Log an explicit-engine failure, then try ONLY the local extractive
+     * summary — never another AI engine. Returns the fallback result, or an
+     * honest error when even the extractive summary has nothing to work with.
+     */
+    async failWithFallback(taskId, taskSummary, prompt, started, cloudAllowed, reason, payloadSummary) {
+      await this.log({ taskId, taskSummary, engine: "local-fallback", reason: `${reason} — no other engine tried (explicit engine choice).`, latencyMs: Date.now() - started, cloudAllowed, payloadSummary });
+      const fallback = this.extractiveFallback(prompt);
+      if (fallback) return { ok: true, text: fallback, engine: "local-fallback" };
+      return { ok: false, error: `${reason} No local extractive summary was possible either.`, engine: "none" };
     }
     /** Local, offline, deterministic extractive summary of the page content embedded in the prompt. */
     extractiveFallback(prompt) {

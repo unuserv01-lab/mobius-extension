@@ -82,14 +82,22 @@ export class SubAgent {
       const res = await this.sendToTab(tabId, { type: 'MOBIUS_INSERT_REPLY', text: draft });
       inserted = Boolean(res?.ok);
     }
+    const engineLabel =
+      gen.engine === 'cloud'
+        ? 'via Cloud Gemini'
+        : gen.engine === 'local-server'
+          ? 'via local server'
+          : gen.engine === 'local-fallback'
+            ? 'via local extractive fallback'
+            : 'Locally via Gemini Nano';
     return {
       taskId: this.task.id,
       ok: true,
       engine: gen.engine,
       text: draft,
       provenance: inserted
-        ? `Done (Processed ${gen.engine === 'cloud' ? 'via Cloud Gemini' : 'Locally via Gemini Nano'}) — draft inserted into WhatsApp Web`
-        : `Done (Processed ${gen.engine === 'cloud' ? 'via Cloud Gemini' : 'Locally via Gemini Nano'}) — draft ready, copy it manually (DOM actions are OFF)`,
+        ? `Done (Processed ${engineLabel}) — draft inserted into WhatsApp Web`
+        : `Done (Processed ${engineLabel}) — draft ready, copy it manually (DOM actions are OFF)`,
     };
   }
 
@@ -118,7 +126,7 @@ export class SubAgent {
       ok: true,
       engine: gen.engine,
       text: gen.text.trim(),
-      provenance: `Summary (${gen.engine === 'cloud' ? 'Cloud Gemini' : gen.engine === 'on-device' ? 'Gemini Nano on-device' : 'local extractive fallback'})`,
+      provenance: `Summary (${gen.engine === 'cloud' ? 'Cloud Gemini' : gen.engine === 'on-device' ? 'Gemini Nano on-device' : gen.engine === 'local-server' ? 'local server' : 'local extractive fallback'})`,
     };
   }
 
@@ -133,7 +141,7 @@ export class SubAgent {
       ok: true,
       engine: gen.engine,
       text: gen.text.trim(),
-      provenance: `Answered (${gen.engine === 'cloud' ? 'Cloud Gemini' : gen.engine === 'on-device' ? 'Gemini Nano on-device' : 'local extractive fallback'})`,
+      provenance: `Answered (${gen.engine === 'cloud' ? 'Cloud Gemini' : gen.engine === 'on-device' ? 'Gemini Nano on-device' : gen.engine === 'local-server' ? 'local server' : 'local extractive fallback'})`,
     };
   }
 

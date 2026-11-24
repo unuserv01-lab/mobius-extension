@@ -17,7 +17,7 @@ export class RouterLogView {
       .map(
         (l) => `
         <div class="card log-entry">
-          <span class="badge ${l.engine}">${l.engine === 'on-device' ? 'ON-DEVICE' : l.engine === 'cloud' ? 'CLOUD' : 'LOCAL FALLBACK'}</span>
+          <span class="badge ${l.engine}">${l.engine === 'on-device' ? 'ON-DEVICE' : l.engine === 'cloud' ? 'CLOUD' : l.engine === 'local-server' ? 'LOCAL SERVER' : 'LOCAL FALLBACK'}</span>
           <time>${new Date(l.timestamp).toLocaleTimeString()}</time>
           <div>${this.escape(l.taskSummary)}</div>
           <div class="muted">${this.escape(l.reason)}</div>

@@ -15,11 +15,20 @@ export interface MobiusTask {
 export interface TaskResult {
   taskId: string;
   ok: boolean;
-  engine: 'on-device' | 'cloud' | 'local-fallback' | 'none';
+  engine: 'on-device' | 'cloud' | 'local-server' | 'local-fallback' | 'none';
   text: string;
   /** Human-readable provenance, e.g. "Processed Locally via Gemini Nano". */
   provenance: string;
   error?: string;
+}
+
+/** Engine selection (Workstream J, v6). "auto" = today's behavior (Nano first, cloud if allowed). */
+export type EngineChoice = 'auto' | 'nano' | 'cloud' | 'local';
+
+/** Local-server (e.g. Ollama) connection settings, persisted in mobius_settings. */
+export interface LocalServerSettings {
+  localServerBaseUrl: string;
+  localServerModel: string;
 }
 
 export type RouterDecision = {
@@ -27,7 +36,7 @@ export type RouterDecision = {
   timestamp: number;
   taskId: string;
   taskSummary: string;
-  engine: 'on-device' | 'cloud' | 'local-fallback';
+  engine: 'on-device' | 'cloud' | 'local-server' | 'local-fallback';
   reason: string;
   latencyMs: number;
   cloudAllowed: boolean;
@@ -61,7 +70,9 @@ export const DEFAULT_PERMISSIONS: PermissionGates = {
   cloudAI: false, // default OFF — P4: cloud is borrowed intelligence
 };
 
-export interface MobiusSettings {
+export interface MobiusSettings extends Partial<LocalServerSettings> {
   memoryTtlSeconds: number;
   tempTtlSeconds: number;
+  /** Engine selection, default 'auto'. Persisted in chrome.storage.local (mobius_settings). */
+  engine?: EngineChoice;
 }
