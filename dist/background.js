@@ -5904,7 +5904,7 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       try {
         const app2 = getFirebaseApp();
         const ai = getAI(app2, { backend: new GoogleAIBackend() });
-        const model = getGenerativeModel(ai, { model: "gemini-2.0-flash" });
+        const model = getGenerativeModel(ai, { model: "gemini-3.8-flash" });
         const result = await model.generateContent(prompt);
         const text = result.response.text();
         if (!text || !text.trim()) return { ok: false, error: "Cloud Gemini returned an empty response." };
@@ -5936,10 +5936,7 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
         try {
           const app2 = getFirebaseApp();
           const ai = getAI(app2, { backend: new GoogleAIBackend() });
-          const model = getGenerativeModel(ai, {
-            model: "gemini-nano",
-            inferenceMode: "on-device"
-          });
+          const model = getGenerativeModel(ai, { mode: InferenceMode.ONLY_ON_DEVICE });
           const result = await model.generateContent(prompt);
           const text = result.response.text();
           if (text && text.trim()) return { ok: true, text: text.trim(), source: "firebase-nano" };

@@ -91,3 +91,33 @@ Full Manifest V3 Chrome extension scaffold per `~/workspace/your_files/prompt-cl
 - Akibat: Developer mode tidak bisa diaktifkan, tombol "Load unpacked" tidak bisa diklik, file picker tidak bisa memilih dist/. Side panel, page summarizer, dan service worker tidak teruji sama sekali. Satu-satunya yang terverifikasi: halaman uji Wikipedia berhasil dimuat normal (tanpa extension).
 - Lanjutan: tes live HANYA bisa di Chrome Tuan sendiri (load unpacked dist/ di laptopnya). WA Web smart-reply tetap butuh sesi WhatsApp Tuan.
 - Tidak ada perubahan pada Firebase, App Check, GitHub, atau akun apa pun.
+
+## 24 Nov 2026 — On-device bug fix (Claude repo review, verified by Muse)
+
+**Bug (serius, terkonfirmasi dari tipe SDK terpasang firebase 12.19.0):**
+`OnDeviceAI.ts` memanggil `getGenerativeModel(ai, { model: 'gemini-nano', inferenceMode: 'on-device' })`
+di balik cast `as unknown as`. Di tipe SDK asli, `getGenerativeModel(ai, ModelParams |
+HybridParams)`: `HybridParams = { mode: InferenceMode; onDeviceParams?; inCloudParams? }`
+(tidak ada kunci `model`/`inferenceMode`), `ModelParams = { model: string; ... }` (tidak
+ada `inferenceMode`). Akibatnya SDK menempuh jalur cloud ModelParams dengan model bernama
+"gemini-nano" — prompt (termasuk teks WA) terkirim ke API Google sebelum error, padahal
+"Allow Cloud AI" OFF. Janji inti MOBIUS bocor.
+
+**Perbaikan:** `getGenerativeModel(ai, { mode: InferenceMode.ONLY_ON_DEVICE })`, tanpa cast
+(TypeScript kini menegur bila salah). `tsc --noEmit` lolos, `npm run build` sukses, dist
+terverifikasi: `only_on_device` ada, `gemini-2.0-flash` hilang. `CloudAI.ts`: model cloud
+`gemini-2.0-flash` → `gemini-3.8-flash` (2.5-flash sudah ditolak untuk pengguna baru,
+terverifikasi di Android 24 Nov; 3.8-flash diterima backend yang sama). `.gitignore`
+ditambahkan (repo sebelumnya tidak punya).
+
+**Belum terverifikasi (butuh tes live di Chrome laptop):** bukti Network tab (nol request
+ke Google saat Nano jalan); apakah Prompt API (`LanguageModel`) tersedia di MV3 service
+worker — kalau tidak, fallback ekstraktif lokal yang tercatat jujur sebagai
+`local-fallback` di AIRouter. Android TIDAK kena bug ini: `OnDeviceAI.kt` memakai
+`InferenceMode.ONLY_ON_DEVICE` + `OnDeviceConfig` API Kotlin, terverifikasi via javap
+saat build v1.
+
+**Catatan lain dari review (roadmap, bukan sekarang):** skenario hero perbandingan harga +
+format skill belum ada di extension; `<all_urls>` di manifest vs klaim "minimal
+permissions"; App Check enforcement JANGAN dinyalakan dulu (debug token masih placeholder;
+Android sengaja Unenforced).

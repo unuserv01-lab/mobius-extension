@@ -9,7 +9,10 @@ export class CloudAI {
     try {
       const app = getFirebaseApp(); // throws a clear error if keys are placeholders
       const ai = getAI(app, { backend: new GoogleAIBackend() });
-      const model = getGenerativeModel(ai, { model: 'gemini-2.0-flash' });
+      // gemini-3.8-flash: gemini-2.0-flash is superseded (2.5-flash already
+      // rejected for new users, verified on Android 24 Nov). 3.8-flash was
+      // accepted by the same Firebase AI Logic backend on Android (v3 test).
+      const model = getGenerativeModel(ai, { model: 'gemini-3.8-flash' });
       const result = await model.generateContent(prompt);
       const text = result.response.text();
       if (!text || !text.trim()) return { ok: false, error: 'Cloud Gemini returned an empty response.' };

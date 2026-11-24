@@ -1,11 +1,17 @@
 // OnDeviceAI — Gemini Nano via the Firebase AI Logic JS SDK (P3).
 // This is the DEFAULT intelligence: inference runs on-device first.
 // Runtime path: Firebase AI Logic -> getAI() -> getGenerativeModel() with
-// inferenceMode 'on-device' (Gemini Nano). If the SDK reports Nano as
-// unavailable (or Firebase is not configured), we fall back to Chrome's
-// built-in Prompt API (LanguageModel) when present, and finally to a local
-// extractive summary so the extension still works offline.
-import { getAI, getGenerativeModel, GoogleAIBackend } from 'firebase/ai';
+// { mode: InferenceMode.ONLY_ON_DEVICE } (HybridParams, firebase 12.19.0).
+// If Nano is unavailable, generateContent throws (never falls back to cloud);
+// we then try Chrome's built-in Prompt API (LanguageModel) when present,
+// and AIRouter finally falls back to a local extractive summary.
+// BUG FIX 24 Nov 2026 (found by Claude's repo review, verified against the
+// installed SDK types): the old call passed { model: 'gemini-nano',
+// inferenceMode: 'on-device' } behind an `as unknown as` cast. Neither key
+// exists in HybridParams, so the SDK treated it as a plain cloud ModelParams
+// call with a model named "gemini-nano" — the prompt left the device before
+// erroring, even with "Allow Cloud AI" OFF. ONLY_ON_DEVICE can never reach cloud.
+import { getAI, getGenerativeModel, GoogleAIBackend, InferenceMode } from 'firebase/ai';
 import { getFirebaseApp, isFirebaseConfigured } from '../config/firebase';
 
 export type OnDeviceResult = { ok: true; text: string; source: 'firebase-nano' | 'prompt-api' } | { ok: false; error: string };
@@ -35,10 +41,7 @@ export class OnDeviceAI {
       try {
         const app = getFirebaseApp();
         const ai = getAI(app, { backend: new GoogleAIBackend() });
-        const model = getGenerativeModel(ai, {
-          model: 'gemini-nano',
-          inferenceMode: 'on-device',
-        } as unknown as Parameters<typeof getGenerativeModel>[1]);
+        const model = getGenerativeModel(ai, { mode: InferenceMode.ONLY_ON_DEVICE });
         const result = await model.generateContent(prompt);
         const text = result.response.text();
         if (text && text.trim()) return { ok: true, text: text.trim(), source: 'firebase-nano' };
