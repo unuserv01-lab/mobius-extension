@@ -1,0 +1,1 @@
+{"compilerOptions":{"esModuleInterop":true,"forceConsistentCasingInFileNames":true,"lib":["ES2022","DOM","DOM.Iterable","WebWorker"],"module":"ESNext","moduleResolution":"bundler","noUnusedLocals":false,"noUnusedParameters":false,"skipLibCheck":true,"strict":true,"target":"ES2022","types":["chrome"]},"include":["src","vite.config.ts"]}

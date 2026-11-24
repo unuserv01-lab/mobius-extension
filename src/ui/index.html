@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MOBIUS — Side Panel</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #f8f9fa; color: #111; }
+      header { background: linear-gradient(135deg, #1a73e8, #7c4dff); color: #fff; padding: 14px 16px; }
+      header h1 { margin: 0; font-size: 18px; }
+      header p { margin: 2px 0 0; font-size: 12px; opacity: .9; }
+      nav { display: flex; gap: 4px; padding: 8px; background: #fff; border-bottom: 1px solid #ddd; position: sticky; top: 0; }
+      nav button { flex: 1; border: 1px solid #ddd; background: #fff; border-radius: 8px; padding: 8px 4px; font-size: 12px; font-weight: 600; cursor: pointer; }
+      nav button.active { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+      main { padding: 14px; }
+      section h2 { font-size: 15px; margin: 4px 0 8px; }
+      .card { background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid #eee; }
+      .row:last-child { border-bottom: none; }
+      .row small { display: block; color: #555; font-weight: 400; margin-top: 2px; }
+      .switch { width: 44px; height: 24px; appearance: none; background: #ccc; border-radius: 12px; position: relative; cursor: pointer; flex-shrink: 0; }
+      .switch:checked { background: #1a73e8; }
+      .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: left .15s; }
+      .switch:checked::after { left: 22px; }
+      .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
+      .badge.on-device { background: #e6f4ea; color: #137333; }
+      .badge.cloud { background: #fef7e0; color: #b06000; }
+      .badge.local-fallback { background: #f1f3f4; color: #555; }
+      .mono { font-family: ui-monospace, monospace; font-size: 11px; word-break: break-word; }
+      .muted { color: #555; font-size: 12px; }
+      .btn { border: 1px solid #ccc; background: #fff; border-radius: 8px; padding: 8px 12px; font-size: 13px; cursor: pointer; }
+      .btn.danger { color: #b3261e; border-color: #b3261e; }
+      .btn.primary { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+      input[type="text"], input[type="number"] { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #ccc; border-radius: 8px; font-size: 13px; }
+      .log-entry { font-size: 12px; }
+      .log-entry time { color: #555; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>MOBIUS</h1>
+      <p>Your Intelligence. Everywhere. Owned by You.</p>
+    </header>
+    <nav id="tabs">
+      <button data-tab="onboarding">Onboarding</button>
+      <button data-tab="router" class="active">Router Log</button>
+      <button data-tab="settings">Settings</button>
+      <button data-tab="history">History</button>
+    </nav>
+    <main id="view"></main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
