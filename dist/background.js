@@ -11,11 +11,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   const DEFAULT_LOCAL_SERVER_BASE_URL = "http://localhost:11434";
   const DEFAULT_LOCAL_SERVER_MODEL = "llama3.1";
   const DEFAULT_LOCAL_SERVER_TIMEOUT_MS = 6e4;
+  const DEFAULT_CHAT_RETENTION_SECONDS = 24 * 60 * 60;
   const STORAGE_KEYS = {
     permissions: "mobius_permissions",
     memory: "mobius_memory",
     routerLog: "mobius_router_log",
-    settings: "mobius_settings"
+    settings: "mobius_settings",
+    chatHistory: "mobius_chat_history"
   };
   class PromptBuilder {
     static whatsappReply(lastMessage, sender, userInstruction) {
@@ -89,9 +91,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       __publicField(this, "timeoutId", null);
       this.tempStore = new TempStore(tempTtlSeconds);
     }
-    start(timeoutMs = 12e4) {
+    start(timeoutMs2 = 12e4) {
       this.controller = new AbortController();
-      this.timeoutId = setTimeout(() => this.abort("timeout"), timeoutMs);
+      this.timeoutId = setTimeout(() => this.abort("timeout"), timeoutMs2);
       return this.controller.signal;
     }
     abort(reason = "aborted") {
@@ -1556,8 +1558,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   const name$7 = "@firebase/remote-config";
   const name$6 = "@firebase/remote-config-compat";
   const name$5 = "@firebase/storage";
-  const name$4 = "@firebase/storage-compat";
-  const name$3 = "@firebase/firestore";
+  const name$4$1 = "@firebase/storage-compat";
+  const name$3$1 = "@firebase/firestore";
   const name$2$1 = "@firebase/ai";
   const name$1$1 = "@firebase/firestore-compat";
   const name$r = "firebase";
@@ -1601,8 +1603,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     [name$7]: "fire-rc",
     [name$6]: "fire-rc-compat",
     [name$5]: "fire-gcs",
-    [name$4]: "fire-gcs-compat",
-    [name$3]: "fire-fst",
+    [name$4$1]: "fire-gcs-compat",
+    [name$3$1]: "fire-fst",
     [name$1$1]: "fire-fst-compat",
     [name$2$1]: "fire-vertex",
     "fire-js": "fire-js",
@@ -2236,7 +2238,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
    * limitations under the License.
    */
   registerCoreComponents("");
-  var name$2 = "@firebase/ai";
+  var name$4 = "@firebase/ai";
   var version$2 = "2.16.0";
   /**
    * @license
@@ -2960,11 +2962,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
   }
   ChromeAdapterImpl.SUPPORTED_MIME_TYPES = ["image/jpeg", "image/png"];
-  function chromeAdapterFactory(mode, window2, params) {
+  function chromeAdapterFactory(mode, window2, params2) {
     const globalObj = window2 || getGlobal();
     const languageModel = globalObj.LanguageModel;
     if (languageModel && mode) {
-      return new ChromeAdapterImpl(languageModel, mode, params);
+      return new ChromeAdapterImpl(languageModel, mode, params2);
     }
   }
   /**
@@ -3179,8 +3181,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   const TIMEOUT_EXPIRED_MESSAGE = "Timeout has expired.";
   const ABORT_ERROR_NAME = "AbortError";
   class RequestURL {
-    constructor(params) {
-      this.params = params;
+    constructor(params2) {
+      this.params = params2;
     }
     toString() {
       const url = new URL(this.baseUrl);
@@ -3200,11 +3202,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return ((_a = this.params.singleRequestOptions) == null ? void 0 : _a.baseUrl) ?? `https://${DEFAULT_DOMAIN}`;
     }
     get queryParams() {
-      const params = new URLSearchParams();
+      const params2 = new URLSearchParams();
       if (this.params.stream) {
-        params.set("alt", "sse");
+        params2.set("alt", "sse");
       }
-      return params;
+      return params2;
     }
   }
   function getClientHeaders(url) {
@@ -3842,9 +3844,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
    * See the License for the specific language governing permissions and
    * limitations under the License.
    */
-  async function generateContentStreamOnCloud(apiSettings, model, params, singleRequestOptions) {
+  async function generateContentStreamOnCloud(apiSettings, model, params2, singleRequestOptions) {
     if (apiSettings.backend.backendType === BackendType.GOOGLE_AI) {
-      params = mapGenerateContentRequest(params);
+      params2 = mapGenerateContentRequest(params2);
     }
     return makeRequest({
       task: "streamGenerateContent",
@@ -3852,15 +3854,15 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       apiSettings,
       stream: true,
       singleRequestOptions
-    }, JSON.stringify(params));
+    }, JSON.stringify(params2));
   }
-  async function generateContentStream(apiSettings, model, params, chromeAdapter, singleRequestOptions) {
-    const callResult = await callCloudOrDevice(params, chromeAdapter, () => chromeAdapter.generateContentStream(params), () => generateContentStreamOnCloud(apiSettings, model, params, singleRequestOptions));
+  async function generateContentStream(apiSettings, model, params2, chromeAdapter, singleRequestOptions) {
+    const callResult = await callCloudOrDevice(params2, chromeAdapter, () => chromeAdapter.generateContentStream(params2), () => generateContentStreamOnCloud(apiSettings, model, params2, singleRequestOptions));
     return processStream(callResult.response, apiSettings, callResult.inferenceSource);
   }
-  async function generateContentOnCloud(apiSettings, model, params, singleRequestOptions) {
+  async function generateContentOnCloud(apiSettings, model, params2, singleRequestOptions) {
     if (apiSettings.backend.backendType === BackendType.GOOGLE_AI) {
-      params = mapGenerateContentRequest(params);
+      params2 = mapGenerateContentRequest(params2);
     }
     return makeRequest({
       model,
@@ -3868,10 +3870,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       apiSettings,
       stream: false,
       singleRequestOptions
-    }, JSON.stringify(params));
+    }, JSON.stringify(params2));
   }
-  async function generateContent(apiSettings, model, params, chromeAdapter, singleRequestOptions) {
-    const callResult = await callCloudOrDevice(params, chromeAdapter, () => chromeAdapter.generateContent(params), () => generateContentOnCloud(apiSettings, model, params, singleRequestOptions));
+  async function generateContent(apiSettings, model, params2, chromeAdapter, singleRequestOptions) {
+    const callResult = await callCloudOrDevice(params2, chromeAdapter, () => chromeAdapter.generateContent(params2), () => generateContentOnCloud(apiSettings, model, params2, singleRequestOptions));
     const generateContentResponse = await processGenerateContentResponse(callResult.response, apiSettings);
     const enhancedResponse = createEnhancedContentResponse(generateContentResponse, callResult.inferenceSource);
     return {
@@ -3952,16 +3954,16 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     return content;
   }
-  function formatGenerateContentInput(params) {
+  function formatGenerateContentInput(params2) {
     let formattedRequest;
-    if (params.contents) {
-      formattedRequest = params;
+    if (params2.contents) {
+      formattedRequest = params2;
     } else {
-      const content = formatNewContent(params);
+      const content = formatNewContent(params2);
       formattedRequest = { contents: [content] };
     }
-    if (params.systemInstruction) {
-      formattedRequest.systemInstruction = formatSystemInstruction(params.systemInstruction);
+    if (params2.systemInstruction) {
+      formattedRequest.systemInstruction = formatSystemInstruction(params2.systemInstruction);
     }
     return formattedRequest;
   }
@@ -3984,8 +3986,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   const SILENT_ERROR = "SILENT_ERROR";
   const DEFAULT_MAX_SEQUENTIAL_FUNCTION_CALLS = 10;
   class ChatSessionBase {
-    constructor(apiSettings, params, requestOptions) {
-      this.params = params;
+    constructor(apiSettings, params2, requestOptions) {
+      this.params = params2;
       this.requestOptions = requestOptions;
       this._history = [];
       this._sendPromise = Promise.resolve();
@@ -4180,13 +4182,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         }
         await Promise.all(promiseList);
         const functionResponseParts = [];
-        for (const { name: name2, id, results } of activeCallList) {
+        for (const { name: name2, id: id2, results } of activeCallList) {
           const functionResponse = {
             name: name2,
             response: await results
           };
-          if (id) {
-            functionResponse.id = id;
+          if (id2) {
+            functionResponse.id = id2;
           }
           functionResponseParts.push({
             functionResponse
@@ -4301,16 +4303,16 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
    * limitations under the License.
    */
   class ChatSession extends ChatSessionBase {
-    constructor(apiSettings, model, chromeAdapter, params, requestOptions) {
+    constructor(apiSettings, model, chromeAdapter, params2, requestOptions) {
       var _a;
-      super(apiSettings, params, requestOptions);
+      super(apiSettings, params2, requestOptions);
       this.model = model;
       this.chromeAdapter = chromeAdapter;
-      this.params = params;
+      this.params = params2;
       this.requestOptions = requestOptions;
-      if (params == null ? void 0 : params.history) {
-        validateChatHistory(params.history);
-        this._history = params.history;
+      if (params2 == null ? void 0 : params2.history) {
+        validateChatHistory(params2.history);
+        this._history = params2.history;
       }
       if (((_a = this.params) == null ? void 0 : _a.systemInstruction) != null) {
         this.params = {
@@ -4389,13 +4391,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
    * See the License for the specific language governing permissions and
    * limitations under the License.
    */
-  async function countTokensOnCloud(apiSettings, model, params, singleRequestOptions) {
+  async function countTokensOnCloud(apiSettings, model, params2, singleRequestOptions) {
     let body = "";
     if (apiSettings.backend.backendType === BackendType.GOOGLE_AI) {
-      const mappedParams = mapCountTokensRequest(params, model);
+      const mappedParams = mapCountTokensRequest(params2, model);
       body = JSON.stringify(mappedParams);
     } else {
-      body = JSON.stringify(params);
+      body = JSON.stringify(params2);
     }
     const response = await makeRequest({
       model,
@@ -4406,11 +4408,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }, body);
     return response.json();
   }
-  async function countTokens(apiSettings, model, params, chromeAdapter, requestOptions) {
+  async function countTokens(apiSettings, model, params2, chromeAdapter, requestOptions) {
     if ((chromeAdapter == null ? void 0 : chromeAdapter.mode) === InferenceMode.ONLY_ON_DEVICE) {
       throw new AIError(AIErrorCode.UNSUPPORTED, "countTokens() is not supported for on-device models.");
     }
-    return countTokensOnCloud(apiSettings, model, params, requestOptions);
+    return countTokensOnCloud(apiSettings, model, params2, requestOptions);
   }
   /**
    * @license
@@ -4673,11 +4675,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       "PUBLIC"
       /* ComponentType.PUBLIC */
     ).setMultipleInstances(true));
-    registerVersion(name$2, version$2);
-    registerVersion(name$2, version$2, "esm2020");
+    registerVersion(name$4, version$2);
+    registerVersion(name$4, version$2, "esm2020");
   }
   registerAI();
-  var name$1 = "firebase";
+  var name$3 = "firebase";
   var version$1 = "12.19.0";
   /**
    * @license
@@ -4695,7 +4697,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
    * See the License for the specific language governing permissions and
    * limitations under the License.
    */
-  registerVersion(name$1, version$1, "app");
+  registerVersion(name$3, version$1, "app");
   /**
    * @license
    * Copyright 2020 Google LLC
@@ -4811,7 +4813,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         this.pending = new Deferred();
         this.pending.promise.catch((_e) => {
         });
-        await sleep(this.getNextRun(hasSucceeded));
+        await sleep$1(this.getNextRun(hasSucceeded));
         this.pending.resolve();
         await this.pending.promise;
         this.pending = new Deferred();
@@ -4845,7 +4847,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
     }
   }
-  function sleep(ms) {
+  function sleep$1(ms) {
     return new Promise((resolve) => {
       setTimeout(resolve, ms);
     });
@@ -5575,7 +5577,7 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       removeTokenListener: (listener) => removeTokenListener(appCheck.app, listener)
     };
   }
-  const name = "@firebase/app-check";
+  const name$2 = "@firebase/app-check";
   const version = "0.13.1";
   const RECAPTCHA_ENTERPRISE_URL = "https://www.google.com/recaptcha/enterprise.js";
   function initializeEnterprise(app2, siteKey) {
@@ -5859,7 +5861,7 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       "EXPLICIT"
       /* InstantiationMode.EXPLICIT */
     ));
-    registerVersion(name, version);
+    registerVersion(name$2, version);
   }
   registerAppCheck();
   const FIREBASE_CONFIG = JSON.parse(
@@ -6125,6 +6127,46 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       await chrome.storage.local.set({ [STORAGE_KEYS.routerLog]: [] });
     }
   }
+  class ChatHistory {
+    async add(role, text, retentionSeconds) {
+      const now = Date.now();
+      const msg = {
+        id: `chat_${now}_${Math.random().toString(36).slice(2, 8)}`,
+        role,
+        text,
+        createdAt: now,
+        expiresAt: now + Math.max(60, retentionSeconds) * 1e3
+      };
+      const all = await this.readRaw();
+      all.push(msg);
+      await chrome.storage.local.set({ [STORAGE_KEYS.chatHistory]: all.slice(-200) });
+      return msg;
+    }
+    async list(now = Date.now()) {
+      const all = await this.readRaw();
+      const kept = all.filter((m) => m.expiresAt > now).sort((a, b) => a.createdAt - b.createdAt);
+      if (kept.length !== all.length) {
+        await chrome.storage.local.set({ [STORAGE_KEYS.chatHistory]: kept });
+      }
+      return kept;
+    }
+    async clear() {
+      await chrome.storage.local.set({ [STORAGE_KEYS.chatHistory]: [] });
+    }
+    /** Delete expired messages. Returns the number purged. */
+    async purgeExpired(now = Date.now()) {
+      const all = await this.readRaw();
+      const kept = all.filter((m) => m.expiresAt > now);
+      const purged = all.length - kept.length;
+      if (purged > 0) await chrome.storage.local.set({ [STORAGE_KEYS.chatHistory]: kept });
+      return purged;
+    }
+    async readRaw() {
+      const data = await chrome.storage.local.get(STORAGE_KEYS.chatHistory);
+      const list = data[STORAGE_KEYS.chatHistory];
+      return Array.isArray(list) ? list : [];
+    }
+  }
   class ContextManager {
     /** Assemble context for a task. pageText is supplied by the caller (content script). */
     async build(tabId, pageText, recentTaskSummaries) {
@@ -6158,6 +6200,229 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       };
     }
   }
+  const DEFAULT_LANGUAGE = "id";
+  const ID = {
+    navOnboarding: "Onboarding",
+    navRouterLog: "Log Router",
+    navSettings: "Pengaturan",
+    navHistory: "Riwayat",
+    navChat: "Chat",
+    onbWelcome: "Selamat datang di MOBIUS",
+    onbIntro: "MOBIUS berjalan lokal di browser Anda. AI on-device (Gemini Nano) adalah default. Tidak ada data yang keluar dari perangkat Anda kecuali Anda mengizinkan Cloud AI di bawah.",
+    onbHowItWorks: "Cara kerja",
+    onbSteps: '1. Klik bubble mengambang di halaman mana pun.\n2. Tanyakan ke MOBIUS — mis. "Ringkas halaman ini" atau, di WhatsApp Web, "Balas pesan terakhir".\n3. MOBIUS membuat draf on-device, menyisipkan draf (bila aksi DOM aktif), dan mencatat setiap keputusan routing AI di tab Log Router.',
+    gateBubble: "Bubble Mengambang",
+    gateReadPage: "Baca Halaman / Konteks DOM",
+    gateDomActions: "Aksi DOM Antar-Aplikasi",
+    gateMemory: "Riwayat Konteks / Memori (lokal, TTL)",
+    gateCloudAI: "Izinkan Cloud AI (Kecerdasan Pinjaman)",
+    explainBubble: "Tampilkan bubble MOBIUS mengambang di halaman web.",
+    explainReadPage: "Baca teks tab aktif (chat WhatsApp Web, artikel) supaya MOBIUS bisa memakai konteks halaman.",
+    explainDomActions: "Ketik / sisipkan balasan ke input web (mis. kotak pesan WhatsApp Web).",
+    explainMemory: "Simpan hasil tugas secara lokal di perangkat ini, dengan batas waktu (TTL).",
+    explainCloudAI: "Izinkan Cloud AI (kecerdasan pinjaman). Saat OFF, MOBIUS tidak pernah memanggil cloud, bahkan bila AI on-device tidak tersedia.",
+    denialNeeds: 'Ini butuh "{detail}" — saat ini OFF. Aktifkan di Side Panel MOBIUS (Onboarding / Pengaturan) untuk memakai fitur ini.',
+    settingsTitle: "Pengaturan",
+    setCloudAI: "Izinkan Cloud AI (Kecerdasan Pinjaman)",
+    setCloudAIDesc: "Saat OFF (default), MOBIUS tidak pernah memanggil cloud — bahkan bila AI on-device tidak tersedia. Setiap panggilan cloud dicatat di Log Router.",
+    setBubble: "Bubble Mengambang",
+    setBubbleDesc: "Tampilkan bubble MOBIUS di halaman web.",
+    setMemory: "Memori (lokal, TTL)",
+    setMemoryDesc: "Simpan hasil tugas hanya di perangkat ini.",
+    setEngine: "Mesin AI",
+    setEngineDesc: 'Kecerdasan mana yang menjawab. Default "Otomatis" = Nano on-device dulu, cloud hanya bila diizinkan. Mesin yang dipilih eksplisit tidak pernah diam-diam pindah ke mesin lain — bila gagal, MOBIUS mencatatnya dan hanya fallback ke ringkasan ekstraktif lokal.',
+    setEngineLabel: "Mesin",
+    engineAuto: "Otomatis (Nano dulu, cloud bila diizinkan)",
+    engineNano: "Nano on-device saja",
+    engineCloud: 'Cloud Gemini saja (butuh "Izinkan Cloud AI")',
+    engineLocal: "Server lokal saja (mis. Ollama di laptop ini)",
+    setLocalBaseUrl: "URL dasar server lokal",
+    setLocalModel: "Model server lokal",
+    setLocalNote: 'Tidak ada model yang jalan di dalam browser — "server lokal" adalah program di laptop Anda (mis. Ollama: ollama serve, lalu ollama pull llama3.1). Extension hanya memanggilnya lewat HTTP. Bila server mati, MOBIUS mengatakannya, bukan pura-pura berhasil.',
+    setSaveEngine: "Simpan pengaturan mesin",
+    setSaved: "Tersimpan.",
+    setTtl: "Batas waktu (TTL)",
+    setTtlDesc: "Entri memori kedaluwarsa setelah sekian hari; data subagent sementara setelah sekian menit.",
+    setMemoryTtl: "TTL Memori (hari)",
+    setTempTtl: "TTL data sementara (menit)",
+    setSaveTtl: "Simpan TTL",
+    setFirebaseStatus: "Status Firebase AI Logic",
+    setFirebaseOk: "Kunci Firebase sudah dikonfigurasi di src/config/firebase.ts. Gemini Nano on-device dan Gemini cloud tersedia lewat Firebase AI Logic SDK.",
+    setFirebaseMissing: 'Kunci Firebase BELUM dikonfigurasi — tempel di src/config/firebase.ts (lihat README "Firebase setup"). Sampai saat itu, MOBIUS berjalan dengan Prompt API bawaan / fallback ekstraktif lokal dan tetap bekerja dengan baik.',
+    setLanguage: "Bahasa",
+    setLanguageDesc: "Berlaku untuk side panel dan bubble.",
+    langIndonesian: "Bahasa Indonesia",
+    langEnglish: "English",
+    setChatHistory: "Riwayat chat",
+    setChatHistoryDesc: "Berapa lama pesan chat disimpan.",
+    retention1h: "1 jam",
+    retention24h: "24 jam",
+    retention7d: "7 hari",
+    setSave: "Simpan",
+    histTitle: "Riwayat & Memori",
+    histDesc: "Hasil tugas yang diputuskan Core untuk disimpan — hanya lokal, dengan batas waktu. Tidak ada memori yang pernah dikirim ke cloud.",
+    histEmpty: "Belum ada memori tersimpan.",
+    histDelete: "Hapus",
+    histClearAll: "Hapus semua memori",
+    histSource: "sumber",
+    histExpires: "kedaluwarsa",
+    logTitle: "Log Router AI",
+    logDesc: "Setiap keputusan routing yang dibuat MOBIUS — on-device dulu, cloud hanya bila diizinkan dan dibutuhkan. Diperbarui tiap 3 detik.",
+    logEmpty: "Belum ada keputusan. Tanyakan sesuatu ke MOBIUS dari bubble.",
+    logClear: "Hapus log",
+    logCloudAllowed: "cloud diizinkan",
+    logYes: "ya",
+    logNo: "tidak",
+    chatTitle: "Riwayat Chat",
+    chatDesc: "Pesan yang Anda kirim dari bubble, disimpan di perangkat ini selama masa retensi di Pengaturan.",
+    chatEmpty: "Belum ada pesan chat.",
+    chatClear: "Hapus riwayat chat",
+    chatYou: "Anda",
+    bubbleDesc: "Tanyakan soal halaman ini, atau balas pesan WhatsApp terakhir. Diproses on-device secara default.",
+    bubblePlaceholder: "cth. Ringkas halaman ini / Balas pesan terakhir",
+    bubbleAsk: "Tanya MOBIUS",
+    bubblePanel: "Panel Samping",
+    bubbleThinking: "Berpikir on-device…",
+    bubbleNoResponse: "Tidak ada respons dari inti MOBIUS. Muat ulang halaman dan coba lagi.",
+    bubbleTaskFailed: "Tugas gagal.",
+    bubbleUnreachable: "Tidak bisa menghubungi inti MOBIUS: ",
+    bubbleSensitiveTitle: "Data sensitif ditemukan di pesan Anda: {types}. Belum ada yang dikirim.",
+    bubbleSensitiveContinue: "Tetap lanjut",
+    bubbleSensitiveCancel: "Batal",
+    bubbleHistoryLabel: "Sebelumnya di chat ini",
+    skillMatched: 'Skill "{skill}" cocok lewat kata kunci (skor {score}) — dijalankan secara deterministik, lokal.',
+    skillDone: "Selesai: {skill}.",
+    skillFailed: "Skill gagal: {message}",
+    skillNoQuery: 'Sebutkan produknya — mis. "cari harga sepatu di Shopee".',
+    skillNeedsReadPage: "Skill ini membaca halaman, jadi butuh izin baca halaman.",
+    typeKtp: "nomor KTP",
+    typePhone: "nomor HP",
+    typeAccount: "nomor rekening",
+    typeEmail: "email",
+    typePassword: "kata sandi"
+  };
+  const EN = {
+    navOnboarding: "Onboarding",
+    navRouterLog: "Router Log",
+    navSettings: "Settings",
+    navHistory: "History",
+    navChat: "Chat",
+    onbWelcome: "Welcome to MOBIUS",
+    onbIntro: "MOBIUS runs locally in your browser. On-device AI (Gemini Nano) is the default. Nothing leaves your device unless you explicitly allow Cloud AI below.",
+    onbHowItWorks: "How it works",
+    onbSteps: '1. Click the floating bubble on any page.\n2. Ask MOBIUS — e.g. "Summarize this page" or, on WhatsApp Web, "Reply to the last message".\n3. MOBIUS drafts on-device, inserts the draft (if DOM actions are on), and logs every AI routing decision in the Router Log tab.',
+    gateBubble: "Floating Bubble Overlay",
+    gateReadPage: "Read Page / DOM Context",
+    gateDomActions: "Cross-App DOM Actions",
+    gateMemory: "Context History / Memory (local, TTL)",
+    gateCloudAI: "Allow Cloud AI (Borrowed Intelligence)",
+    explainBubble: "Show the floating MOBIUS bubble on webpages.",
+    explainReadPage: "Read the active tab text (WhatsApp Web chats, articles) so MOBIUS can use page context.",
+    explainDomActions: "Type / insert replies into web inputs (e.g. the WhatsApp Web message box).",
+    explainMemory: "Store task outcomes locally on this device, with a time limit (TTL).",
+    explainCloudAI: "Allow Cloud AI (borrowed intelligence). When OFF, MOBIUS never calls the cloud, even if on-device AI is unavailable.",
+    denialNeeds: 'This needs "{detail}" — it is currently OFF. Enable it in the MOBIUS Side Panel (Onboarding / Settings) to use this feature.',
+    settingsTitle: "Settings",
+    setCloudAI: "Allow Cloud AI (Borrowed Intelligence)",
+    setCloudAIDesc: "When OFF (default), MOBIUS never calls the cloud — even if on-device AI is unavailable. Every cloud call is logged in the Router Log.",
+    setBubble: "Floating Bubble",
+    setBubbleDesc: "Show the MOBIUS bubble on webpages.",
+    setMemory: "Memory (local, TTL)",
+    setMemoryDesc: "Store task outcomes on this device only.",
+    setEngine: "AI Engine",
+    setEngineDesc: 'Which intelligence answers. Default "Auto" = Nano on-device first, cloud only if allowed. An explicit engine never silently switches to another one — if it fails, MOBIUS logs it and falls back only to the local extractive summary.',
+    setEngineLabel: "Engine",
+    engineAuto: "Auto (Nano first, cloud if allowed)",
+    engineNano: "Nano on-device only",
+    engineCloud: 'Cloud Gemini only (needs "Allow Cloud AI")',
+    engineLocal: "Local server only (e.g. Ollama on this laptop)",
+    setLocalBaseUrl: "Local server base URL",
+    setLocalModel: "Local server model",
+    setLocalNote: 'No model runs inside the browser — the "local server" is a program on your laptop (e.g. Ollama: ollama serve, then ollama pull llama3.1). The extension only calls it over HTTP. If the server is down, MOBIUS says so instead of pretending success.',
+    setSaveEngine: "Save engine settings",
+    setSaved: "Saved.",
+    setTtl: "Time limits (TTL)",
+    setTtlDesc: "Memory entries expire after this many days; temporary subagent data after this many minutes.",
+    setMemoryTtl: "Memory TTL (days)",
+    setTempTtl: "Temporary data TTL (minutes)",
+    setSaveTtl: "Save TTL",
+    setFirebaseStatus: "Firebase AI Logic status",
+    setFirebaseOk: "Firebase keys are configured in src/config/firebase.ts. On-device Gemini Nano and cloud Gemini are available through the Firebase AI Logic SDK.",
+    setFirebaseMissing: 'Firebase keys are NOT configured yet — paste them into src/config/firebase.ts (see README "Firebase setup"). Until then, MOBIUS runs on the built-in Prompt API / local extractive fallback and degrades gracefully.',
+    setLanguage: "Language",
+    setLanguageDesc: "Applies to the side panel and the bubble.",
+    langIndonesian: "Bahasa Indonesia",
+    langEnglish: "English",
+    setChatHistory: "Chat history",
+    setChatHistoryDesc: "How long chat messages are kept.",
+    retention1h: "1 hour",
+    retention24h: "24 hours",
+    retention7d: "7 days",
+    setSave: "Save",
+    histTitle: "History & Memory",
+    histDesc: "Task outcomes the Core decided to keep — stored locally only, with a time limit. No memory is ever sent to the cloud.",
+    histEmpty: "No memory stored yet.",
+    histDelete: "Delete",
+    histClearAll: "Clear all memory",
+    histSource: "source",
+    histExpires: "expires",
+    logTitle: "AI Router Log",
+    logDesc: "Every routing decision MOBIUS makes — on-device first, cloud only when allowed and needed. Refreshes every 3 seconds.",
+    logEmpty: "No decisions yet. Ask MOBIUS something from the bubble.",
+    logClear: "Clear log",
+    logCloudAllowed: "cloud allowed",
+    logYes: "yes",
+    logNo: "no",
+    chatTitle: "Chat History",
+    chatDesc: "Messages you sent from the bubble, kept on this device for the retention period in Settings.",
+    chatEmpty: "No chat messages yet.",
+    chatClear: "Clear chat history",
+    chatYou: "You",
+    bubbleDesc: "Ask about this page, or reply to the last WhatsApp message. Processed on-device by default.",
+    bubblePlaceholder: "e.g. Summarize this page / Reply to the last message",
+    bubbleAsk: "Ask MOBIUS",
+    bubblePanel: "Side Panel",
+    bubbleThinking: "Thinking on-device…",
+    bubbleNoResponse: "No response from the MOBIUS core. Reload the page and try again.",
+    bubbleTaskFailed: "Task failed.",
+    bubbleUnreachable: "Could not reach the MOBIUS core: ",
+    bubbleSensitiveTitle: "Sensitive data found in your message: {types}. Nothing was sent yet.",
+    bubbleSensitiveContinue: "Continue anyway",
+    bubbleSensitiveCancel: "Cancel",
+    bubbleHistoryLabel: "Earlier in this chat",
+    skillMatched: 'Skill "{skill}" matched by keyword (score {score}) — running deterministically, locally.',
+    skillDone: "Done: {skill}.",
+    skillFailed: "Skill failed: {message}",
+    skillNoQuery: 'Name the product — e.g. "cari harga sepatu di Shopee".',
+    skillNeedsReadPage: "This skill reads the page, so it needs the read-page permission.",
+    typeKtp: "ID card number",
+    typePhone: "phone number",
+    typeAccount: "bank account number",
+    typeEmail: "email",
+    typePassword: "password"
+  };
+  const STRINGS = { id: ID, en: EN };
+  let cachedLang = DEFAULT_LANGUAGE;
+  async function loadLanguage() {
+    try {
+      const data = await chrome.storage.local.get(STORAGE_KEYS.settings);
+      const stored = data[STORAGE_KEYS.settings];
+      const lang = stored == null ? void 0 : stored.language;
+      cachedLang = lang === "en" || lang === "id" ? lang : DEFAULT_LANGUAGE;
+    } catch {
+      cachedLang = DEFAULT_LANGUAGE;
+    }
+    return cachedLang;
+  }
+  function t(key, lang = cachedLang) {
+    var _a;
+    return ((_a = STRINGS[lang]) == null ? void 0 : _a[key]) ?? STRINGS.en[key] ?? key;
+  }
+  function tf(key, vars, lang = cachedLang) {
+    let out = t(key, lang);
+    for (const [k, v] of Object.entries(vars)) out = out.replace(`{${k}}`, String(v));
+    return out;
+  }
   class MemoryStore {
     async readAll() {
       const data = await chrome.storage.local.get(STORAGE_KEYS.memory);
@@ -6185,8 +6450,8 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       const entries = await this.readAll();
       return entries.sort((a, b) => b.createdAt - a.createdAt);
     }
-    async remove(id) {
-      const entries = (await this.readAll()).filter((e) => e.id !== id);
+    async remove(id2) {
+      const entries = (await this.readAll()).filter((e) => e.id !== id2);
       await this.writeAll(entries);
     }
     async clear() {
@@ -6214,11 +6479,11 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
     // default OFF — P4: cloud is borrowed intelligence
   };
   const EXPLANATIONS = {
-    bubble: "Show the floating MOBIUS bubble on webpages.",
-    readPage: "Read the active tab text (WhatsApp Web chats, articles) so MOBIUS can use page context.",
-    domActions: "Type / insert replies into web inputs (e.g. the WhatsApp Web message box).",
-    memory: "Store task outcomes locally on this device, with a time limit (TTL).",
-    cloudAI: "Allow Cloud AI (borrowed intelligence). When OFF, MOBIUS never calls the cloud, even if on-device AI is unavailable."
+    bubble: "explainBubble",
+    readPage: "explainReadPage",
+    domActions: "explainDomActions",
+    memory: "explainMemory",
+    cloudAI: "explainCloudAI"
   };
   class PermissionManager {
     constructor() {
@@ -6243,14 +6508,356 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       return gates;
     }
     explain(key) {
-      return EXPLANATIONS[key];
+      return t(EXPLANATIONS[key]);
     }
     /** Human-readable denial message for a capability the user has not opted into. */
     denialMessage(key) {
-      return `This needs "${this.explain(key)}" — it is currently OFF. Enable it in the MOBIUS Side Panel (Onboarding / Settings) to use this feature.`;
+      return tf("denialNeeds", { detail: this.explain(key) });
     }
   }
+  function okResult(message, data) {
+    return { success: true, message, data };
+  }
+  function failResult(message) {
+    return { success: false, message };
+  }
+  const REF = /\$([A-Za-z0-9_.]+)/g;
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+  class SkillRunner {
+    async run(skill, params2, tool, onStatus = () => void 0) {
+      if (skill.steps.length > skill.maxSteps) {
+        return {
+          success: false,
+          partial: false,
+          message: `Skill '${skill.id}' has ${skill.steps.length} steps but maxSteps is ${skill.maxSteps}.`,
+          steps: [],
+          vars: { ...params2 }
+        };
+      }
+      const vars = {};
+      for (const p of skill.params) {
+        if (params2[p.name] !== void 0) vars[p.name] = params2[p.name];
+        else if (p.default) vars[p.name] = p.default;
+      }
+      const deadline = Date.now() + skill.timeoutMs;
+      const results = [];
+      let last = null;
+      let failed = false;
+      let partial = false;
+      let failMessage = "";
+      for (let index = 0; index < skill.steps.length; index++) {
+        const step = skill.steps[index];
+        if (Date.now() > deadline) {
+          failed = true;
+          failMessage = `Skill timed out after ${skill.timeoutMs}ms at step ${index + 1}.`;
+          results.push({ index, tool: step.tool, success: false, message: failMessage, durationMs: 0 });
+          break;
+        }
+        if (step.when && !evalWhen(step.when, vars, last)) {
+          results.push({ index, tool: step.tool, success: true, message: "skipped (when false)", durationMs: 0 });
+          continue;
+        }
+        onStatus(`Step ${index + 1}/${skill.steps.length}: ${step.tool}...`);
+        let resolved = null;
+        let resolveError = null;
+        try {
+          const r = {};
+          for (const [k, v] of Object.entries(step.args)) r[k] = resolveRefs(v, vars);
+          resolved = r;
+        } catch (e) {
+          resolveError = e instanceof Error ? e.message : String(e);
+        }
+        const started = Date.now();
+        let result;
+        if (resolved === null) {
+          result = failResult(resolveError ?? "missing parameter");
+        } else if (step.risk === "irreversible") {
+          result = failResult("Step is marked irreversible, but the extension has no approval UI — refused.");
+        } else {
+          let attempt = 0;
+          for (; ; ) {
+            try {
+              result = await tool.call(step.tool, resolved);
+            } catch (e) {
+              result = failResult(e instanceof Error ? e.message : String(e));
+            }
+            if (result.success || attempt >= step.maxRetries) break;
+            attempt++;
+            await sleep(300);
+          }
+        }
+        const duration = Date.now() - started;
+        results.push({ index, tool: step.tool, success: result.success, message: result.message, durationMs: duration });
+        if (result.success) {
+          last = result;
+          if (step.storeAs) {
+            vars[step.storeAs] = result.message;
+            for (const [k, v] of Object.entries(result.data ?? {})) vars[`${step.storeAs}.${k}`] = v;
+          }
+        } else {
+          last = result;
+          if (step.onFail === "skip") {
+            partial = true;
+          } else if (step.onFail === "stop") {
+            partial = true;
+            failMessage = `Stopped at step ${index + 1} (${step.tool}): ${result.message}`;
+            break;
+          } else {
+            failed = true;
+            failMessage = `Step ${index + 1} (${step.tool}) failed: ${result.message}`;
+            break;
+          }
+        }
+      }
+      const lastOk = [...results].reverse().find((r) => r.success);
+      const message = failed ? failMessage : partial ? failMessage ? `Partially done — ${failMessage}` : `Partially done (some steps skipped): ${(lastOk == null ? void 0 : lastOk.message) ?? skill.name}.` : (lastOk == null ? void 0 : lastOk.message) && lastOk.message.trim() ? lastOk.message : `Done: ${skill.name}.`;
+      return { success: !failed, partial, message, steps: results, vars };
+    }
+  }
+  function resolveRefs(value, vars) {
+    let missing = null;
+    const out = value.replace(REF, (_m, name2) => {
+      if (vars[name2] !== void 0) return vars[name2];
+      missing = name2;
+      return _m;
+    });
+    if (missing !== null) throw new Error(`missing parameter/var '$${missing}'`);
+    return out;
+  }
+  function evalWhen(expr, vars, last) {
+    return expr.split("&&").map((p) => p.trim()).every((part) => evalAtom(part, vars, last));
+  }
+  function evalAtom(atom, vars, last) {
+    const negated = atom.startsWith("!");
+    const core = negated ? atom.slice(1).trim() : atom;
+    let value = false;
+    if (core === "last.success") value = (last == null ? void 0 : last.success) === true;
+    else if (core === "last.failed") value = (last == null ? void 0 : last.success) === false;
+    else if (core.startsWith("vars.")) {
+      const rest = core.slice("vars.".length);
+      if (rest.includes(" contains ")) {
+        const [k, v] = rest.split(" contains ");
+        value = (vars[k.trim()] ?? "").includes(unquote(v.trim()));
+      } else if (rest.includes("==")) {
+        const [k, v] = rest.split("==");
+        value = vars[k.trim()] === unquote(v.trim());
+      } else if (rest.includes("!=")) {
+        const [k, v] = rest.split("!=");
+        value = vars[k.trim()] !== unquote(v.trim());
+      } else {
+        const v = vars[rest];
+        value = v !== void 0 && v.trim() !== "";
+      }
+    }
+    return negated ? !value : value;
+  }
+  function unquote(s) {
+    return s.replace(/^["']|["']$/g, "");
+  }
+  function parseSkill(json) {
+    try {
+      if (typeof json !== "object" || json === null) return null;
+      const obj = json;
+      const id2 = typeof obj.id === "string" ? obj.id.trim() : "";
+      if (!id2) return null;
+      const stepsJson = obj.steps;
+      if (!Array.isArray(stepsJson)) return null;
+      const steps2 = [];
+      for (const s of stepsJson) {
+        if (typeof s !== "object" || s === null) continue;
+        const so = s;
+        const tool = typeof so.tool === "string" ? so.tool.trim() : "";
+        if (!tool) continue;
+        const args = {};
+        if (typeof so.args === "object" && so.args !== null) {
+          for (const [k, v] of Object.entries(so.args)) args[k] = String(v ?? "");
+        }
+        const onFailRaw = typeof so.onFail === "string" ? so.onFail.toLowerCase() : "fail";
+        steps2.push({
+          tool,
+          args,
+          storeAs: typeof so.storeAs === "string" && so.storeAs.trim() ? so.storeAs : null,
+          when: typeof so.when === "string" && so.when.trim() ? so.when : null,
+          onFail: ["fail", "skip", "stop"].includes(onFailRaw) ? onFailRaw : "fail",
+          maxRetries: typeof so.maxRetries === "number" ? Math.min(3, Math.max(0, Math.floor(so.maxRetries))) : 0,
+          risk: so.risk === "irreversible" ? "irreversible" : null
+        });
+      }
+      if (steps2.length === 0) return null;
+      const params2 = [];
+      if (Array.isArray(obj.params)) {
+        for (const p of obj.params) {
+          if (typeof p !== "object" || p === null) continue;
+          const po = p;
+          const name2 = typeof po.name === "string" ? po.name.trim() : "";
+          if (!name2) continue;
+          params2.push({
+            name: name2,
+            required: po.required === true,
+            default: typeof po.default === "string" && po.default.trim() ? po.default : null
+          });
+        }
+      }
+      const triggers2 = [];
+      if (Array.isArray(obj.triggers)) {
+        for (const t2 of obj.triggers) {
+          if (typeof t2 === "string" && t2.trim()) triggers2.push(t2.trim());
+        }
+      }
+      return {
+        id: id2,
+        name: typeof obj.name === "string" && obj.name ? obj.name : id2,
+        description: typeof obj.description === "string" ? obj.description : "",
+        triggers: triggers2,
+        params: params2,
+        steps: steps2,
+        maxSteps: typeof obj.maxSteps === "number" ? Math.min(100, Math.max(1, Math.floor(obj.maxSteps))) : 20,
+        timeoutMs: typeof obj.timeoutMs === "number" ? Math.min(3e5, Math.max(1e3, Math.floor(obj.timeoutMs))) : 6e4,
+        summarize: obj.summarize === true
+      };
+    } catch {
+      return null;
+    }
+  }
+  const description$1 = "Search Shopee (web) for a product and return the top 5 prices found on the page.";
+  const id$1 = "shopee_price_search";
+  const maxSteps$1 = 12;
+  const name$1 = "Shopee price search";
+  const params$1 = [{ "name": "query", "required": true }];
+  const steps$1 = [{ "args": { "url": "https://shopee.co.id/search?keyword=$query" }, "tool": "navigate" }, { "args": { "text": "Rp", "timeoutMs": "15000" }, "onFail": "skip", "tool": "waitForText" }, { "onFail": "skip", "tool": "scroll" }, { "args": { "limit": "100" }, "storeAs": "screen", "tool": "readScreen" }, { "args": { "max": "5", "pattern": "Rp\\s?[0-9][0-9.,]*" }, "storeAs": "prices", "tool": "extract", "when": "last.success" }];
+  const summarize$1 = false;
+  const timeoutMs$1 = 6e4;
+  const triggers$1 = ["shopee", "cari harga", "cek harga", "bandingkan harga", "harga di shopee"];
+  const shopeeSkillJson = {
+    description: description$1,
+    id: id$1,
+    maxSteps: maxSteps$1,
+    name: name$1,
+    params: params$1,
+    steps: steps$1,
+    summarize: summarize$1,
+    timeoutMs: timeoutMs$1,
+    triggers: triggers$1
+  };
+  const description = "Search Tokopedia (web) for a product and return the top 5 prices found on the page.";
+  const id = "tokopedia_price_search";
+  const maxSteps = 12;
+  const name = "Tokopedia price search";
+  const params = [{ "name": "query", "required": true }];
+  const steps = [{ "args": { "url": "https://www.tokopedia.com/search?st=product&q=$query" }, "tool": "navigate" }, { "args": { "text": "Rp", "timeoutMs": "15000" }, "onFail": "skip", "tool": "waitForText" }, { "onFail": "skip", "tool": "scroll" }, { "args": { "limit": "100" }, "storeAs": "screen", "tool": "readScreen" }, { "args": { "max": "5", "pattern": "Rp\\s?[0-9][0-9.,]*" }, "storeAs": "prices", "tool": "extract", "when": "last.success" }];
+  const summarize = false;
+  const timeoutMs = 6e4;
+  const triggers = ["tokopedia", "cari harga", "cek harga", "bandingkan harga", "harga di tokopedia"];
+  const tokopediaSkillJson = {
+    description,
+    id,
+    maxSteps,
+    name,
+    params,
+    steps,
+    summarize,
+    timeoutMs,
+    triggers
+  };
+  class SkillRegistry {
+    constructor() {
+      __publicField(this, "skills");
+      this.skills = [shopeeSkillJson, tokopediaSkillJson].map((j) => parseSkill(j)).filter((s) => s !== null);
+    }
+    all() {
+      return this.skills;
+    }
+    byId(id2) {
+      return this.skills.find((s) => s.id === id2);
+    }
+    match(userText) {
+      const t2 = userText.toLowerCase();
+      let best = null;
+      let bestScore = 0;
+      let secondScore = 0;
+      for (const skill of this.skills) {
+        let score = 0;
+        for (const rawTrigger of skill.triggers) {
+          const trigger = rawTrigger.toLowerCase().trim();
+          if (!trigger) continue;
+          if (t2.includes(trigger)) {
+            score += trigger.includes(" ") ? 3 : 2;
+          } else {
+            const words = trigger.split(/\s+/).filter((w) => w.length > 2);
+            if (words.length > 0 && words.some((w) => t2.includes(w))) score += 1;
+          }
+        }
+        if (score > bestScore) {
+          secondScore = bestScore;
+          bestScore = score;
+          best = skill;
+        } else if (score > secondScore) {
+          secondScore = score;
+        }
+      }
+      return best !== null && bestScore >= 3 && bestScore > secondScore ? { skill: best, score: bestScore } : null;
+    }
+  }
+  const FILLER_WORDS = [
+    "tolong",
+    "mohon",
+    "cari",
+    "cek",
+    "carikan",
+    "tolong cari",
+    "tolong cek",
+    "di",
+    "untuk",
+    "harga",
+    "harganya",
+    "berapa",
+    "dong",
+    "ya",
+    "saja",
+    "aja",
+    "please",
+    "find",
+    "check",
+    "search",
+    "for",
+    "the",
+    "price",
+    "of"
+  ];
+  function extractQuery(input, skillTriggers) {
+    let text = ` ${input.toLowerCase().trim()} `;
+    const triggers2 = [...skillTriggers].sort((a, b) => b.length - a.length);
+    for (const trigger of triggers2) {
+      text = text.split(trigger.toLowerCase()).join(" ");
+    }
+    let query = text.replace(/[?,!.]+/g, " ").replace(/\s+/g, " ").trim();
+    for (const filler of FILLER_WORDS) {
+      const re = new RegExp(`^(${filler}\\s+)+`, "i");
+      query = query.replace(re, "").trim();
+    }
+    for (const filler of ["di", "dong", "ya", "saja", "aja", "please"]) {
+      const re = new RegExp(`(\\s+${filler})+$`, "i");
+      query = query.replace(re, "").trim();
+    }
+    return query.length >= 2 ? query : null;
+  }
   class TaskRouter {
+    constructor() {
+      __publicField(this, "skills", new SkillRegistry());
+    }
+    /** Keyword skill match + extracted params. Null = no clear match (LLM fallback). */
+    matchSkill(input) {
+      const match = this.skills.match(input);
+      if (!match) return null;
+      const query = extractQuery(input, match.skill.triggers);
+      if (!query) return null;
+      const params2 = {};
+      const required = match.skill.params.find((p) => p.required);
+      if (required) params2[required.name] = query;
+      return { match, params: params2 };
+    }
     route(input, url) {
       const text = input.toLowerCase().trim();
       const isWhatsApp = (url ?? "").includes("web.whatsapp.com");
@@ -6269,10 +6876,137 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       return { intent: "chat", agentType: "chat", confidence: 0.6 };
     }
   }
+  class WebSkillTools {
+    constructor() {
+      __publicField(this, "tabId", null);
+    }
+    async call(tool, args) {
+      switch (tool) {
+        case "navigate":
+          return this.navigate(args.url ?? "");
+        case "clickText":
+          return this.toTab("MOBIUS_TOOL_CLICK_TEXT", { text: args.text ?? "", exact: args.exact === "true" });
+        case "typeText":
+          return this.toTab("MOBIUS_TOOL_TYPE_TEXT", { text: args.text ?? "" });
+        case "submit":
+          return this.toTab("MOBIUS_TOOL_SUBMIT", {});
+        case "readScreen":
+          return this.readScreen(args.limit ? Number(args.limit) : 200);
+        case "findText":
+          return this.toTab("MOBIUS_TOOL_FIND_TEXT", { text: args.text ?? "", exact: args.exact === "true" });
+        case "extract":
+          return this.extract(args.pattern ?? "", args.max ? Number(args.max) : 5);
+        case "scroll":
+          return this.toTab("MOBIUS_TOOL_SCROLL", {});
+        case "back":
+          return this.toTab("MOBIUS_TOOL_BACK", {});
+        case "home":
+          return this.toTab("MOBIUS_TOOL_HOME", {});
+        case "wait":
+          await new Promise((r) => setTimeout(r, args.ms ? Number(args.ms) : 1e3));
+          return okResult(`Waited ${args.ms ?? "1000"}ms.`);
+        case "waitForText":
+          return this.toTab("MOBIUS_TOOL_WAIT_FOR_TEXT", { text: args.text ?? "", timeoutMs: String(args.timeoutMs ? Number(args.timeoutMs) : 5e3) });
+        default:
+          return failResult(`Unknown tool: ${tool}`);
+      }
+    }
+    async navigate(rawUrl) {
+      if (!rawUrl) return failResult("navigate needs a url.");
+      const url = encodeURI(rawUrl);
+      try {
+        const tab = await this.activeTab();
+        if ((tab == null ? void 0 : tab.id) !== void 0) {
+          this.tabId = tab.id;
+          await chrome.tabs.update(tab.id, { url });
+          await this.waitForLoad(tab.id, 2e4);
+          return okResult(`Opened ${url}`);
+        }
+        const created = await chrome.tabs.create({ url });
+        if (created.id !== void 0) {
+          this.tabId = created.id;
+          await this.waitForLoad(created.id, 2e4);
+          return okResult(`Opened ${url} in a new tab`);
+        }
+        return failResult("Could not open a tab.");
+      } catch (e) {
+        return failResult(e instanceof Error ? e.message : String(e));
+      }
+    }
+    async readScreen(limit) {
+      var _a;
+      const res = await this.toTab("MOBIUS_TOOL_READ_PAGE", {});
+      if (!res.success || !((_a = res.data) == null ? void 0 : _a.text)) return res;
+      const text = res.data.text;
+      const capped = text.slice(0, Math.max(1e3, limit * 100));
+      return okResult(capped.slice(0, 400) + (capped.length > 400 ? "…" : ""), { text: capped });
+    }
+    async extract(pattern, max) {
+      var _a;
+      if (!pattern) return failResult("extract needs a pattern.");
+      let re;
+      try {
+        re = new RegExp(pattern, "g");
+      } catch {
+        return failResult(`Invalid pattern: ${pattern}`);
+      }
+      const res = await this.toTab("MOBIUS_TOOL_EXTRACT", { pattern, max: String(max) });
+      if (!res.success) return res;
+      const matches = ((_a = res.data) == null ? void 0 : _a.matches) ? res.data.matches.split("\n").filter(Boolean) : [];
+      if (matches.length === 0) return failResult("No matches found on this page.");
+      const shown = matches.slice(0, max);
+      return okResult(`Found ${matches.length} price(s): ${shown.join(", ")}`, { matches: shown.join("\n"), count: String(matches.length) });
+    }
+    async toTab(type, payload) {
+      try {
+        const tab = await this.activeTab();
+        if ((tab == null ? void 0 : tab.id) === void 0) return failResult("No active tab — open a page first.");
+        this.tabId = tab.id;
+        const res = await chrome.tabs.sendMessage(tab.id, { type, ...payload });
+        if (!res) return failResult("Content script did not answer (reload the page and try again).");
+        if (!res.ok) return failResult(res.error ?? "Tool failed on the page.");
+        if (res.text !== void 0) return okResult(res.text.slice(0, 400), { text: res.text });
+        if (res.matches !== void 0) return okResult(res.matches.join(", "), { matches: res.matches.join("\n") });
+        if (res.found !== void 0) return res.found ? okResult(`Found "${payload.text ?? ""}" on the page.`) : failResult(`"${payload.text ?? ""}" not found on the page.`);
+        return okResult("Done.");
+      } catch (e) {
+        return failResult(e instanceof Error ? e.message : String(e));
+      }
+    }
+    async activeTab() {
+      if (this.tabId !== null) {
+        try {
+          const tab = await chrome.tabs.get(this.tabId);
+          if (tab) return tab;
+        } catch {
+          this.tabId = null;
+        }
+      }
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      return tabs[0];
+    }
+    waitForLoad(tabId, timeoutMs2) {
+      return new Promise((resolve) => {
+        const done = () => {
+          chrome.tabs.onUpdated.removeListener(listener);
+          resolve();
+        };
+        const timer = setTimeout(done, timeoutMs2);
+        const listener = (id2, info) => {
+          if (id2 === tabId && info.status === "complete") {
+            clearTimeout(timer);
+            done();
+          }
+        };
+        chrome.tabs.onUpdated.addListener(listener);
+      });
+    }
+  }
   class Orchestrator {
     constructor() {
       __publicField(this, "permissions", new PermissionManager());
       __publicField(this, "memory", new MemoryStore());
+      __publicField(this, "chatHistory", new ChatHistory());
       __publicField(this, "contextManager", new ContextManager());
       __publicField(this, "taskRouter", new TaskRouter());
       __publicField(this, "aiRouter", new AIRouter(this.permissions));
@@ -6283,12 +7017,18 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       const stored = data[STORAGE_KEYS.settings];
       return {
         memoryTtlSeconds: (stored == null ? void 0 : stored.memoryTtlSeconds) ?? DEFAULT_MEMORY_TTL_SECONDS,
-        tempTtlSeconds: (stored == null ? void 0 : stored.tempTtlSeconds) ?? DEFAULT_TEMP_TTL_SECONDS
+        tempTtlSeconds: (stored == null ? void 0 : stored.tempTtlSeconds) ?? DEFAULT_TEMP_TTL_SECONDS,
+        chatRetentionSeconds: (stored == null ? void 0 : stored.chatRetentionSeconds) ?? DEFAULT_CHAT_RETENTION_SECONDS
       };
     }
     /** Main entry: handle one user task end-to-end (prompt section 6). */
     async handleTask(task) {
+      await loadLanguage();
       const settings = await this.getSettings();
+      const skillMatch = this.taskRouter.matchSkill(task.input);
+      if (skillMatch) {
+        return this.runSkill(task, skillMatch.match.skill, skillMatch.match.score, skillMatch.params, settings);
+      }
       const route = this.taskRouter.route(task.input, task.url);
       if ((route.intent === "wa-reply" || route.intent === "summarize") && !await this.permissions.isAllowed("readPage")) {
         return this.fail(task, "none", this.permissions.denialMessage("readPage"));
@@ -6310,6 +7050,56 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
         true
       );
     }
+    /** Deterministic skill run (no LLM): navigate the web, read, extract. */
+    async runSkill(task, skill, score, params2, settings) {
+      const started = Date.now();
+      const summary = task.input.slice(0, 80).replace(/\s+/g, " ");
+      if (!await this.permissions.isAllowed("readPage")) {
+        return this.fail(task, "none", `${t("skillNeedsReadPage")} ${this.permissions.denialMessage("readPage")}`);
+      }
+      const outcome = await new SkillRunner().run(skill, params2, new WebSkillTools());
+      const cloudAllowed = await this.permissions.isAllowed("cloudAI");
+      await this.aiRouter.log({
+        taskId: task.id,
+        taskSummary: summary,
+        engine: "skill",
+        reason: tf("skillMatched", { skill: skill.name, score }),
+        latencyMs: Date.now() - started,
+        cloudAllowed,
+        payloadSummary: `skill ${skill.id}, ${outcome.steps.length} steps, ${outcome.success ? "ok" : outcome.partial ? "partial" : "failed"}`
+      });
+      const text = outcome.success ? this.formatSkillResult(skill.name, outcome.vars) : tf("skillFailed", { message: outcome.message });
+      const result = {
+        taskId: task.id,
+        ok: outcome.success,
+        engine: "skill",
+        text,
+        provenance: `Skill: ${skill.name} (deterministic, local)`,
+        error: outcome.success ? void 0 : outcome.message
+      };
+      await this.chatHistory.add("user", task.input, settings.chatRetentionSeconds ?? DEFAULT_CHAT_RETENTION_SECONDS);
+      await this.chatHistory.add("assistant", text, settings.chatRetentionSeconds ?? DEFAULT_CHAT_RETENTION_SECONDS);
+      if (result.ok && await this.permissions.isAllowed("memory")) {
+        await this.memory.add({
+          type: "task_result",
+          content: `${task.input.slice(0, 120)} -> ${text.slice(0, 200)} [skill:${skill.id}]`,
+          source: `${task.id}/skill:${skill.id}`,
+          ttlSeconds: settings.memoryTtlSeconds
+        });
+      }
+      return result;
+    }
+    /** "Shopee price search — sepatu nike\nRp120.000\nRp135.500…" from skill vars. */
+    formatSkillResult(skillName, vars) {
+      const prices = vars["prices.matches"] ?? vars.prices ?? "";
+      const query = vars.query ? ` — ${vars.query}` : "";
+      if (prices) {
+        const lines = prices.split("\n").filter(Boolean);
+        return `${skillName}${query}
+${lines.map((p) => `• ${p}`).join("\n")}`;
+      }
+      return `${tf("skillDone", { skill: skillName })}${query}`;
+    }
     async runWithAgent(task, agentType, settings, insertIntoPage) {
       const recent = (await this.memory.list()).slice(0, 5).map((e) => e.content);
       const context = await this.contextManager.build(task.tabId, task.pageText, recent);
@@ -6330,6 +7120,9 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
           ttlSeconds: settings.memoryTtlSeconds
         });
       }
+      const retention = settings.chatRetentionSeconds ?? DEFAULT_CHAT_RETENTION_SECONDS;
+      await this.chatHistory.add("user", task.input, retention);
+      if (result.text) await this.chatHistory.add("assistant", result.text, retention);
       return result;
     }
     fail(task, engine, message) {
@@ -6346,6 +7139,9 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
     getMemoryStore() {
       return this.memory;
     }
+    getChatHistory() {
+      return this.chatHistory;
+    }
     getPermissionManager() {
       return this.permissions;
     }
@@ -6354,6 +7150,7 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
     }
   }
   const orchestrator = new Orchestrator();
+  void loadLanguage();
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     var _a, _b, _c;
     const msg = message;
@@ -6378,6 +7175,9 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
     orchestrator.getMemoryStore().purgeExpired().then((purged) => {
       if (purged > 0) console.log(`[MOBIUS] TTL cleanup purged ${purged} expired memory entries.`);
     }).catch((err) => console.warn("[MOBIUS] TTL cleanup failed:", err));
+    orchestrator.getChatHistory().purgeExpired().then((purged) => {
+      if (purged > 0) console.log(`[MOBIUS] TTL cleanup purged ${purged} expired chat messages.`);
+    }).catch((err) => console.warn("[MOBIUS] Chat cleanup failed:", err));
   });
   console.log("[MOBIUS] Core service worker started.");
 })();

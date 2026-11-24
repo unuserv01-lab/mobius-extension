@@ -3,16 +3,17 @@
 // side-panel Onboarding/Settings views. Denied capabilities degrade
 // gracefully: the dependent feature is disabled and the user is told why.
 import { STORAGE_KEYS } from '../config/constants';
+import { t, tf, type StringKey } from './i18n';
 import { DEFAULT_PERMISSIONS, type PermissionGates } from './types';
 
 export type CapabilityKey = keyof PermissionGates;
 
-const EXPLANATIONS: Record<CapabilityKey, string> = {
-  bubble: 'Show the floating MOBIUS bubble on webpages.',
-  readPage: 'Read the active tab text (WhatsApp Web chats, articles) so MOBIUS can use page context.',
-  domActions: 'Type / insert replies into web inputs (e.g. the WhatsApp Web message box).',
-  memory: 'Store task outcomes locally on this device, with a time limit (TTL).',
-  cloudAI: 'Allow Cloud AI (borrowed intelligence). When OFF, MOBIUS never calls the cloud, even if on-device AI is unavailable.',
+const EXPLANATIONS: Record<CapabilityKey, StringKey> = {
+  bubble: 'explainBubble',
+  readPage: 'explainReadPage',
+  domActions: 'explainDomActions',
+  memory: 'explainMemory',
+  cloudAI: 'explainCloudAI',
 };
 
 export class PermissionManager {
@@ -40,14 +41,11 @@ export class PermissionManager {
   }
 
   explain(key: CapabilityKey): string {
-    return EXPLANATIONS[key];
+    return t(EXPLANATIONS[key]);
   }
 
   /** Human-readable denial message for a capability the user has not opted into. */
   denialMessage(key: CapabilityKey): string {
-    return (
-      `This needs "${this.explain(key)}" — it is currently OFF. ` +
-      `Enable it in the MOBIUS Side Panel (Onboarding / Settings) to use this feature.`
-    );
+    return tf('denialNeeds', { detail: this.explain(key) });
   }
 }

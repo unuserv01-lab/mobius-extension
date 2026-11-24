@@ -1,18 +1,24 @@
 // Orchestrator — the Core. Runs locally in the service worker (P1).
 // Owns: task intake, permission gates, context, routing, subagent lifecycle,
 // and the ONLY write path into MemoryStore (P5).
-import { DEFAULT_MEMORY_TTL_SECONDS, DEFAULT_TEMP_TTL_SECONDS, STORAGE_KEYS } from '../config/constants';
+import { DEFAULT_CHAT_RETENTION_SECONDS, DEFAULT_MEMORY_TTL_SECONDS, DEFAULT_TEMP_TTL_SECONDS, STORAGE_KEYS } from '../config/constants';
 import { AgentFactory } from '../agent/AgentFactory';
 import { AIRouter } from '../ai/AIRouter';
+import { ChatHistory } from './ChatHistory';
 import { ContextManager } from './ContextManager';
+import { loadLanguage, t, tf } from './i18n';
 import { MemoryStore } from './MemoryStore';
 import { PermissionManager } from './PermissionManager';
+import { SkillRunner } from './SkillRunner';
 import { TaskRouter } from './TaskRouter';
+import { WebSkillTools } from './WebSkillTools';
+import type { Skill } from './Skill';
 import type { MobiusSettings, MobiusTask, TaskResult } from './types';
 
 export class Orchestrator {
   private permissions = new PermissionManager();
   private memory = new MemoryStore();
+  private chatHistory = new ChatHistory();
   private contextManager = new ContextManager();
   private taskRouter = new TaskRouter();
   private aiRouter = new AIRouter(this.permissions);
@@ -24,12 +30,21 @@ export class Orchestrator {
     return {
       memoryTtlSeconds: stored?.memoryTtlSeconds ?? DEFAULT_MEMORY_TTL_SECONDS,
       tempTtlSeconds: stored?.tempTtlSeconds ?? DEFAULT_TEMP_TTL_SECONDS,
+      chatRetentionSeconds: stored?.chatRetentionSeconds ?? DEFAULT_CHAT_RETENTION_SECONDS,
     };
   }
 
   /** Main entry: handle one user task end-to-end (prompt section 6). */
   async handleTask(task: MobiusTask): Promise<TaskResult> {
+    await loadLanguage();
     const settings = await this.getSettings();
+
+    // Skills first: a clear keyword match runs deterministically (no LLM).
+    const skillMatch = this.taskRouter.matchSkill(task.input);
+    if (skillMatch) {
+      return this.runSkill(task, skillMatch.match.skill, skillMatch.match.score, skillMatch.params, settings);
+    }
+
     const route = this.taskRouter.route(task.input, task.url);
 
     // Permission gates (P8) — degrade gracefully, never crash.
@@ -42,6 +57,66 @@ export class Orchestrator {
     }
 
     return this.runWithAgent(task, route.agentType, settings, /* insertIntoPage */ true);
+  }
+
+  /** Deterministic skill run (no LLM): navigate the web, read, extract. */
+  private async runSkill(
+    task: MobiusTask,
+    skill: Skill,
+    score: number,
+    params: Record<string, string>,
+    settings: MobiusSettings,
+  ): Promise<TaskResult> {
+    const started = Date.now();
+    const summary = task.input.slice(0, 80).replace(/\s+/g, ' ');
+    if (!(await this.permissions.isAllowed('readPage'))) {
+      return this.fail(task, 'none', `${t('skillNeedsReadPage')} ${this.permissions.denialMessage('readPage')}`);
+    }
+    const outcome = await new SkillRunner().run(skill, params, new WebSkillTools());
+    const cloudAllowed = await this.permissions.isAllowed('cloudAI');
+    await this.aiRouter.log({
+      taskId: task.id,
+      taskSummary: summary,
+      engine: 'skill',
+      reason: tf('skillMatched', { skill: skill.name, score }),
+      latencyMs: Date.now() - started,
+      cloudAllowed,
+      payloadSummary: `skill ${skill.id}, ${outcome.steps.length} steps, ${outcome.success ? 'ok' : outcome.partial ? 'partial' : 'failed'}`,
+    });
+    const text = outcome.success
+      ? this.formatSkillResult(skill.name, outcome.vars)
+      : tf('skillFailed', { message: outcome.message });
+    const result: TaskResult = {
+      taskId: task.id,
+      ok: outcome.success,
+      engine: 'skill',
+      text,
+      provenance: `Skill: ${skill.name} (deterministic, local)`,
+      error: outcome.success ? undefined : outcome.message,
+    };
+    // Same persistence as agent tasks: chat history + core memory.
+    await this.chatHistory.add('user', task.input, settings.chatRetentionSeconds ?? DEFAULT_CHAT_RETENTION_SECONDS);
+    await this.chatHistory.add('assistant', text, settings.chatRetentionSeconds ?? DEFAULT_CHAT_RETENTION_SECONDS);
+    if (result.ok && (await this.permissions.isAllowed('memory'))) {
+      await this.memory.add({
+        type: 'task_result',
+        content: `${task.input.slice(0, 120)} -> ${text.slice(0, 200)} [skill:${skill.id}]`,
+        source: `${task.id}/skill:${skill.id}`,
+        ttlSeconds: settings.memoryTtlSeconds,
+      });
+    }
+    return result;
+  }
+
+  /** "Shopee price search — sepatu nike\nRp120.000\nRp135.500…" from skill vars. */
+  private formatSkillResult(skillName: string, vars: Record<string, string>): string {
+    const prices = vars['prices.matches'] ?? vars.prices ?? '';
+    const query = vars.query ? ` — ${vars.query}` : '';
+    if (prices) {
+      const lines = prices.split('\n').filter(Boolean);
+      return `${skillName}${query}\n${lines.map((p) => `• ${p}`).join('\n')}`;
+    }
+    return `${tf('skillDone', { skill: skillName })}${query}`;
   }
 
   private async runWithAgent(
@@ -74,6 +149,11 @@ export class Orchestrator {
         ttlSeconds: settings.memoryTtlSeconds,
       });
     }
+    // Chat history (v7): the user's own conversation, persisted across
+    // side-panel reopen, under the retention setting.
+    const retention = settings.chatRetentionSeconds ?? DEFAULT_CHAT_RETENTION_SECONDS;
+    await this.chatHistory.add('user', task.input, retention);
+    if (result.text) await this.chatHistory.add('assistant', result.text, retention);
     return result;
   }
 
@@ -91,6 +171,9 @@ export class Orchestrator {
   // Exposed for the service worker / side panel.
   getMemoryStore(): MemoryStore {
     return this.memory;
+  }
+  getChatHistory(): ChatHistory {
+    return this.chatHistory;
   }
   getPermissionManager(): PermissionManager {
     return this.permissions;

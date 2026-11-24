@@ -36,4 +36,35 @@ export class DomReader {
     if (text.length < 40) return { ok: false, error: 'This page has too little readable text to summarize.' };
     return { ok: true, text: text.slice(0, 12_000) };
   }
+
+  /** Does the visible page text contain `text`? */
+  static findText(text: string, exact: boolean): { ok: true; found: boolean } {
+    const body = document.body?.innerText ?? '';
+    const found = exact ? body.includes(text) : body.toLowerCase().includes(text.toLowerCase());
+    return { ok: true, found };
+  }
+
+  /** All regex matches over the visible page text (capped). */
+  static extract(pattern: string, max: number): { ok: true; matches: string[] } | { ok: false; error: string } {
+    let re: RegExp;
+    try {
+      re = new RegExp(pattern, 'g');
+    } catch {
+      return { ok: false, error: `Invalid pattern: ${pattern}` };
+    }
+    const body = document.body?.innerText ?? '';
+    const matches = [...body.matchAll(re)].map((m) => m[0].trim()).filter(Boolean);
+    return { ok: true, matches: matches.slice(0, Math.max(1, max)) };
+  }
+
+  /** Poll until `text` appears (or the timeout passes). */
+  static async waitForText(text: string, timeoutMs: number): Promise<{ ok: true; found: boolean }> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const body = document.body?.innerText ?? '';
+      if (body.includes(text)) return { ok: true, found: true };
+      if (Date.now() >= deadline) return { ok: true, found: false };
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
 }

@@ -1,6 +1,9 @@
 // Shared message / task types for MOBIUS (core <-> content script <-> side panel).
 
-export type TaskIntent = 'wa-reply' | 'summarize' | 'chat';
+export type TaskIntent = 'wa-reply' | 'summarize' | 'chat' | 'skill';
+
+/** Language of the UI (side panel + bubble). Default 'id'. */
+export type Language = 'id' | 'en';
 
 export interface MobiusTask {
   id: string;
@@ -15,7 +18,7 @@ export interface MobiusTask {
 export interface TaskResult {
   taskId: string;
   ok: boolean;
-  engine: 'on-device' | 'cloud' | 'local-server' | 'local-fallback' | 'none';
+  engine: 'on-device' | 'cloud' | 'local-server' | 'local-fallback' | 'skill' | 'none';
   text: string;
   /** Human-readable provenance, e.g. "Processed Locally via Gemini Nano". */
   provenance: string;
@@ -36,7 +39,7 @@ export type RouterDecision = {
   timestamp: number;
   taskId: string;
   taskSummary: string;
-  engine: 'on-device' | 'cloud' | 'local-server' | 'local-fallback';
+  engine: 'on-device' | 'cloud' | 'local-server' | 'local-fallback' | 'skill';
   reason: string;
   latencyMs: number;
   cloudAllowed: boolean;
@@ -75,4 +78,8 @@ export interface MobiusSettings extends Partial<LocalServerSettings> {
   tempTtlSeconds: number;
   /** Engine selection, default 'auto'. Persisted in chrome.storage.local (mobius_settings). */
   engine?: EngineChoice;
+  /** UI language for the side panel + bubble, default 'id'. */
+  language?: Language;
+  /** Chat-history retention, seconds. Same choices as Android: 1h / 24h / 7d. Default 24h. */
+  chatRetentionSeconds?: number;
 }

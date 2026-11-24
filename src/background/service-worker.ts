@@ -2,9 +2,13 @@
 // cleanup alarm (every 5 minutes), and the extension action (opens Side Panel).
 import { TEMP_CLEANUP_ALARM_MINUTES } from '../config/constants';
 import { Orchestrator } from '../core/Orchestrator';
+import { loadLanguage } from '../core/i18n';
 import type { MobiusTask, TaskResult } from '../core/types';
 
 const orchestrator = new Orchestrator();
+
+// Load the persisted UI language once at startup (default 'id').
+void loadLanguage();
 
 // Task intake: bubble / side panel -> Core (local, never leaves the browser by default).
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
@@ -30,7 +34,8 @@ chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => undefined);
 });
 
-// TTL cleanup (P6 / memory model): purge expired memory + router log is capped on write.
+// TTL cleanup (P6 / memory model): purge expired memory + chat history;
+// router log is capped on write.
 chrome.alarms.create('mobius-ttl-cleanup', { periodInMinutes: TEMP_CLEANUP_ALARM_MINUTES });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== 'mobius-ttl-cleanup') return;
@@ -41,6 +46,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       if (purged > 0) console.log(`[MOBIUS] TTL cleanup purged ${purged} expired memory entries.`);
     })
     .catch((err: unknown) => console.warn('[MOBIUS] TTL cleanup failed:', err));
+  orchestrator
+    .getChatHistory()
+    .purgeExpired()
+    .then((purged) => {
+      if (purged > 0) console.log(`[MOBIUS] TTL cleanup purged ${purged} expired chat messages.`);
+    })
+    .catch((err: unknown) => console.warn('[MOBIUS] Chat cleanup failed:', err));
 });
 
 console.log('[MOBIUS] Core service worker started.');

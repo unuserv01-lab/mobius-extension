@@ -1,4 +1,5 @@
-// HistoryView — past tasks + stored core memory (inspect & delete).
+// HistoryView — past tasks + stored core memory (inspect & delete). (v7: i18n.)
+import { loadLanguage, t } from '../core/i18n';
 import { MemoryStore } from '../core/MemoryStore';
 
 export class HistoryView {
@@ -10,6 +11,7 @@ export class HistoryView {
   }
 
   async render(): Promise<void> {
+    await loadLanguage();
     const entries = await this.memory.list();
     const rows = entries
       .map(
@@ -18,17 +20,17 @@ export class HistoryView {
           <span class="badge ${e.type === 'task_result' ? 'on-device' : 'cloud'}">${e.type}</span>
           <time>${new Date(e.createdAt).toLocaleString()}</time>
           <div>${this.escape(e.content)}</div>
-          <div class="muted mono">source: ${this.escape(e.source)} · expires ${new Date(e.expiresAt).toLocaleString()}</div>
-          <button class="btn danger" data-del="${e.id}">Delete</button>
+          <div class="muted mono">${this.escape(t('histSource'))}: ${this.escape(e.source)} · ${this.escape(t('histExpires'))} ${new Date(e.expiresAt).toLocaleString()}</div>
+          <button class="btn danger" data-del="${e.id}">${this.escape(t('histDelete'))}</button>
         </div>`,
       )
       .join('');
     this.el.innerHTML = `
       <section>
-        <h2>History &amp; Memory</h2>
-        <p class="muted">Task outcomes the Core decided to keep — stored locally only, with a time limit. No memory is ever sent to the cloud.</p>
-        ${entries.length === 0 ? '<div class="card muted">No memory stored yet.</div>' : rows}
-        ${entries.length > 0 ? '<button class="btn danger" id="clear-all">Clear all memory</button>' : ''}
+        <h2>${this.escape(t('histTitle'))}</h2>
+        <p class="muted">${this.escape(t('histDesc'))}</p>
+        ${entries.length === 0 ? `<div class="card muted">${this.escape(t('histEmpty'))}</div>` : rows}
+        ${entries.length > 0 ? `<button class="btn danger" id="clear-all">${this.escape(t('histClearAll'))}</button>` : ''}
       </section>`;
     this.el.querySelectorAll<HTMLButtonElement>('[data-del]').forEach((btn) => {
       btn.addEventListener('click', () => {

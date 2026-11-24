@@ -254,3 +254,117 @@ bridge → extension Chrome → HP; `--lan` dari perangkat lain di Wi-Fi yang
 sama; kill-on-timeout 30 dtk secara live; kedaluwarsa tugas 10 menit
 secara live. Batas jujur: tugas hanya di memori (restart = hilang),
 latensi polling beberapa detik, HTTP tanpa enkripsi (LAN rumah saja).
+
+## 24 Nov 2026 — v7 alignment pass (extension = Android v7)
+
+**Tujuan:** extension menyamai aplikasi Android v7 — palet logo, bubble logo,
+pemilih bahasa, Skills + SkillRunner, riwayat chat persisten, alert data
+sensitif, dan badge balasan belum dibaca. **Tidak disentuh:** `ai/OnDeviceAI.ts`
+(tetap `{ mode: InferenceMode.ONLY_ON_DEVICE }`, tanpa cast),
+`ai/CloudAI.ts` (model cloud tetap `gemini-3.8-flash`), App Check enforcement
+tetap OFF, manifest tidak diubah (tidak ada permission baru), tidak ada push
+ke GitHub pada pass ini.
+
+**Yang dibangun:**
+- **Palet logo DNA** — latar `#04000F`, permukaan `#17122E` / `#221A3E`,
+  gradien `#1A73E8` → `#7C4DFF`, glow `#B388FF`, teks `#F2EDFF`, redup
+  `#B9B3D6`. Diterapkan di side panel (`src/ui/index.html` — header, nav,
+  kartu, switch `#7C4DFF`, tombol primary gradien, badge) dan bubble sheet.
+  Header side panel kini menampilkan logo asli (`icons/icon48.png` via
+  `chrome.runtime.getURL`).
+- **Bubble = logo, bukan huruf** — `src/content/BubbleWidget.ts`: tombol
+  bubble menampilkan gambar loop Möbius dari logo (`public/icons/icon128.png`,
+  di-inline sebagai data URI di `src/content/logoDataUri.ts`, 31.596 karakter
+  base64) di atas gradien biru→ungu + glow. **Sengaja TIDAK pakai
+  `web_accessible_resources`**: content script tidak bisa memuat URL
+  `chrome-extension://` kecuali didaftar di manifest, dan manifest tidak
+  boleh diubah tanpa izin — data URI menghindari perubahan manifest.
+- **Pemilih bahasa** — `src/core/i18n.ts` (baru): Bahasa Indonesia / English,
+  tersimpan di `mobius_settings.language`, default **Bahasa Indonesia**.
+  Semua string side panel (Onboarding, Log Router, Chat, Pengaturan, Riwayat)
+  + bubble memakai `t()`; proper noun, nama model (Gemini, Nano), dan tagline
+  tidak diterjemahkan. Ganti bahasa di Settings langsung diterapkan ulang
+  (main.ts + BubbleWidget mendengarkan `chrome.storage.onChanged`).
+  Catatan: terjemahan dibuat di pass ini — agen Android v7 (yang berjalan
+  paralel) mungkin memakai kata yang sedikit berbeda; samakan bila perlu.
+- **Skills (port Android)** — `src/core/Skill.ts` (schema + parseSkill),
+  `src/core/SkillRegistry.ts` (skoring kata kunci sama persis: frasa +3,
+  kata +2, kata parsial +1; cocok bila skor ≥ 3 DAN menang telak),
+  `src/core/SkillRunner.ts` (deterministik: `$params`/`$vars`, `when`,
+  `onFail` fail/skip/stop, `maxRetries`, `maxSteps`, `timeoutMs`; satu
+  perbaikan bug nyata saat tes: `$ref` hilang dulu membuat runner jalan
+  dengan args kosong — sekarang gagal keras di langkah itu),
+  `src/core/WebSkillTools.ts` (adapter Layer 1 web: navigate via chrome.tabs,
+  clickText/typeText/submit/readScreen/findText/extract/scroll/back/home/wait/
+  waitForText via pesan `MOBIUS_TOOL_*` ke content script), dan
+  `src/content/DomReader.ts` + `ActionExecutor.ts` diperluas (findText,
+  extract, waitForText, clickText, typeText, submit, scroll).
+  Skill hero: `src/skills/shopee_price_search.json` +
+  `tokopedia_price_search.json` (web: navigate ke URL pencarian → tunggu "Rp"
+  → baca halaman → extract max 5 harga). `TaskRouter.matchSkill()` mengekstrak
+  query (buang trigger + kata pengisi di depan/belakang); `Orchestrator`
+  mencoba skill DULU sebelum LLM, mencatat satu RouterDecision engine
+  `'skill'` (badge SKILL ungu di Log Router), dan menyimpan ke memori + chat
+  history seperti tugas lain. Gate: semua tool web read-only by construction;
+  langkah `risk="irreversible"` DITOLAK (fail closed — tidak ada UI approval
+  di service worker). Skill butuh izin `readPage`; bila OFF, gagal dengan
+  pesan penolakan yang sama seperti summarize.
+- **Riwayat chat persisten** — `src/core/ChatHistory.ts` (baru): pesan user +
+  asisten di `chrome.storage.local` (`mobius_chat_history`), retensi dari
+  Settings (1 jam / 24 jam / 7 hari, default 24 jam — sama seperti Android),
+  dibersihkan alarm TTL service worker. Bubble menampilkan 6 pesan terakhir
+  saat dibuka; tab **Chat** baru di side panel menampilkan seluruh riwayat +
+  tombol hapus. Sebelum pass ini, percakapan bubble HILANG saat panel
+  ditutup — itu yang diperbaiki.
+- **Alert data sensitif** — `src/core/SensitiveDataScanner.ts` (port Android:
+  pola sama — KTP 16 digit, HP 08/628, rekening 10–15 digit, email, kata
+  sandi; klasifikasi sama). Dijalankan di bubble saat submit, SEBELUM teks
+  dikirim: bila ada temuan, sheet menampilkan peringatan yang menyebut HANYA
+  tipe (nilai tidak pernah ditampilkan/dicatat) + tombol "Tetap lanjut" /
+  "Batal". **Tidak ada jalur upload file/foto di extension** (tidak seperti
+  Android) — jadi tidak ada pemindaian file/OCR; satu-satunya jalur teks
+  adalah input bubble, dan itu yang dipindai.
+- **Badge balasan belum dibaca** — badge lingkaran kecil DI ATAS tombol bubble
+  (`#B388FF`, teks `#04000F`, "9+" bila > 9). Bertambah HANYA bila hasil tiba
+  saat sheet tertutup (mis. pengguna menutup sheet selagi menunggu); hasil
+  yang tiba saat sheet terbuka tidak menambah. Klik bubble/badge membuka sheet
+  dan mereset hitungan ke 0. Badge ikut bergeser saat bubble di-drag.
+  Batas jujur: badge hanya ada di halaman tempat bubble di-inject; bila tidak
+  ada tab terbuka, tidak ada tempat menampilkannya.
+
+**Verifikasi — ✅ SUKSES (`npm run build`, 24 Nov):**
+- `tsc --noEmit` bersih (3 error diperbaiki: impor `t` di Orchestrator,
+  `timeoutMs` number→string di WebSkillTools, `TabChangeInfo` tidak ada di
+  @types/chrome — diganti tipe inline) + 3 bundle Vite: background.js
+  280.554 B, content.js 71.394 B, side panel 247.650 B.
+- dist terverifikasi: manifest parses; `only_on_device` ada,
+  `gemini-3.8-flash` satu-satunya model cloud, `gemini-2.0-flash` NOL di semua
+  bundle; skill + `mobius_chat_history` + data URI logo + `mobius-badge` +
+  string Indonesia ada di bundle yang benar; palet `#04000f/#17122e/#221a3e/
+  #b388ff` ada di content.js.
+- Tes logika (esbuild, 17 cek, semua PASS — `/tmp/ext-test.ts`, tidak
+  di-commit): registry memuat 2 skill; skor Shopee/Tokopedia 8; chat biasa
+  tidak cocok; query "sepatu nike" diekstrak bersih; runner sukses end-to-end
+  dengan tool palsu (5 langkah, harga tersimpan di vars); `$ref` hilang gagal
+  keras; scanner menemukan KTP+HP tanpa menggemakan nilai; teks bersih kosong;
+  i18n id/en benar.
+- Zip: `~/workspace/your_files/mobius-extension-dist-v7.zip` (179.414 byte,
+  12 file, struktur dist utuh: manifest.json di root, background.js,
+  content.js, icons/, assets/, src/ui/index.html).
+
+**Belum dites live (butuh Chrome di laptop Tuan — VM tetap read-only):**
+load unpacked dist/ di `chrome://extensions`; tampilan palet + logo bubble +
+badge; ganti bahasa id/en; skill Shopee/Tokopedia sungguhan (navigasi tab,
+tunggu "Rp", extract harga — selector/struktur halaman bisa berubah);
+riwayat chat bertahan setelah side panel ditutup; alert sensitif (lanjut vs
+batal); round-trip bridge HP → extension (tidak berubah di pass ini).
+
+**Diketahui / sengaja tidak dilakukan:**
+- Query yang menyebut DUA marketplace ("cari harga di shopee dan tokopedia")
+  cocok ke skor tertinggi (Shopee 8 vs Tokopedia 5) — perilaku ini sama
+  persis dengan registry Android; marketplace kedua ditanyakan terpisah.
+- `<all_urls>` di manifest vs klaim "minimal permissions" MASIH ada (dicatat
+  sejak 24 Nov, tidak diubah — butuh keputusan Tuan).
+- Terjemahan id/en dibuat di pass ini; samakan kata dengan Android v7 bila
+  agen Android memilih kata berbeda.
+- Tidak ada OCR: extension tidak punya jalur upload file/foto.
