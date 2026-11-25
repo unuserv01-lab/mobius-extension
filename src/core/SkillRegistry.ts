@@ -6,6 +6,7 @@
 import { parseSkill, type Skill } from './Skill';
 import shopeeSkillJson from '../skills/shopee_price_search.json';
 import tokopediaSkillJson from '../skills/tokopedia_price_search.json';
+import whatsappSkillJson from '../skills/whatsapp_read.json';
 
 export interface SkillMatch {
   skill: Skill;
@@ -16,7 +17,7 @@ export class SkillRegistry {
   private skills: Skill[];
 
   constructor() {
-    this.skills = [shopeeSkillJson, tokopediaSkillJson]
+    this.skills = [shopeeSkillJson, tokopediaSkillJson, whatsappSkillJson]
       .map((j) => parseSkill(j))
       .filter((s): s is Skill => s !== null);
   }

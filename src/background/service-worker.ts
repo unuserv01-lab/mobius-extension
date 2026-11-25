@@ -4,7 +4,7 @@
 // minimum) as a fallback for remote tasks while the side panel is closed —
 // the panel itself polls every 3 s while open (see src/ui/main.ts).
 import { BRIDGE_ALARM_MINUTES, TEMP_CLEANUP_ALARM_MINUTES } from '../config/constants';
-import { pollNextTask, postTaskResult, type BridgeTask } from '../core/BridgeClient';
+import { clearBridgeRunning, isTakeoverActive, pollNextTask, postOrchestratorResult, setBridgeRunning, toMobiusTask, type BridgeTask } from '../core/BridgeClient';
 import { Orchestrator } from '../core/Orchestrator';
 import { loadLanguage } from '../core/i18n';
 import type { MobiusTask, TaskResult } from '../core/types';
@@ -76,13 +76,19 @@ console.log('[MOBIUS] Core service worker started.');
 
 /**
  * Bridge slow poll (worker side). Claims one task, runs it through the
- * Orchestrator (skill match first, then routing — same as a local task),
- * and posts the outcome back. A task with no tab context (remote tasks have
- * none) runs fine for skills + chat; page-dependent intents (summarize /
- * wa-reply) fail honestly when there is no active tab to read.
+ * Orchestrator (browser tasks run their structured handler; everything else
+ * is skill match first, then routing — same as a local task), and posts the
+ * outcome back. A task with no tab context (remote tasks have none) runs
+ * fine for skills + chat; page-dependent intents (summarize / wa-reply)
+ * fail honestly when there is no active tab to read. v9: claims nothing
+ * while the user has taken over (takeover flag — see BridgeClient.ts).
  */
 async function pollBridgeFromWorker(): Promise<void> {
   if (bridgeBusy) return;
+  // v9 takeover: when the user has taken over from the banner, this poller
+  // claims NOTHING (same as the panel poller). In-flight tasks are not
+  // affected — the flag only stops NEW claims.
+  if (await isTakeoverActive()) return;
   let task: BridgeTask | null;
   try {
     task = await pollNextTask();
@@ -94,19 +100,30 @@ async function pollBridgeFromWorker(): Promise<void> {
   }
   if (!task) return;
   bridgeBusy = true;
+  // Announce the running task so the side-panel TakeoverBanner shows even
+  // when the panel did not claim this task itself.
+  await setBridgeRunning(task.taskId).catch(() => undefined);
   try {
-    const mobiusTask: MobiusTask = { id: task.taskId, intent: 'chat', input: task.text };
+    const mobiusTask: MobiusTask = toMobiusTask(task);
     const result = await orchestrator.handleTask(mobiusTask);
-    await postTaskResult(task.taskId, result.ok ? 'done' : 'failed', result.ok ? result.text : result.error ?? 'task failed');
+    await postOrchestratorResult(task.taskId, result);
   } catch (e) {
     // Worker error (e.g. suspended mid-task): report failure if we still can;
     // if the bridge is gone too, its lease requeues the task anyway.
     try {
-      await postTaskResult(task.taskId, 'failed', e instanceof Error ? e.message : String(e));
+      await postOrchestratorResult(task.taskId, {
+        taskId: task.taskId,
+        ok: false,
+        engine: 'none',
+        text: '',
+        provenance: 'Failed',
+        error: e instanceof Error ? e.message : String(e),
+      });
     } catch {
       // Nothing more we can do — the lease is the safety net.
     }
   } finally {
     bridgeBusy = false;
+    await clearBridgeRunning().catch(() => undefined);
   }
 }

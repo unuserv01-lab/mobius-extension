@@ -468,3 +468,271 @@ berhasil dari VM.
 - Nano on-device di Chrome laptop Tuan (lihat checklist di README).
 - `<all_urls>` di manifest vs klaim "minimal permissions" MASIH ada
   (dicatat sejak 24 Nov, tidak diubah — butuh keputusan Tuan).
+
+## 26 Nov 2026 — v9-takeover: browser takeover + banner + protokol persetujuan
+
+Tugas bridge baru: HP mengendalikan browser laptop lewat `text` JSON
+(`browser_navigate` / `browser_read` / `browser_act` — bridge hanya membawa
+teks polos). Extension mendeteksi JSON (`parseBrowserTask` di
+`src/core/BridgeClient.ts`), merutekannya di `Orchestrator.handleTask()`
+SEBELUM skill match / LLM, dan mengeksekusinya deterministik lewat
+`WebSkillTools` (`handleBrowserTask` di `src/core/Orchestrator.ts`):
+navigasi (tunggu load maks. 20 dtk), baca judul + isi, klik/ketik/scroll/
+extract berurutan, berhenti di langkah pertama yang gagal. Hasilnya
+`BrowserTaskResult` JSON (status + url + judul + hasil tiap langkah + teks
+maks. 2000 karakter) yang di-POST verbatim ke bridge (`postOrchestratorResult`:
+`done`/`awaiting_approval` -> bridge `done`, `failed` -> bridge `failed`).
+Gagal dimuat / elemen tidak ditemukan / tanpa tab / permission mati ->
+`failed` jujur, tidak ada klaim sukses palsu.
+
+Protokol persetujuan (FAIL CLOSED): aksi mutating (`clickText`/`typeText`/
+`submit` = `DOM_MUTATING_TOOLS`) tanpa `approved: true` TIDAK dieksekusi sama
+sekali — navigasi pun tidak jalan. Extension mengembalikan
+`awaiting_approval` + `pendingActions` (deskripsi tiap aksi + URL); HP
+menampilkan dialog persetujuan dan, bila user setuju, mengirim tugas BARU
+dengan isi sama + `approved: true`. `approved: true` dengan permission
+`domActions` mati -> `failed` jujur. Kontrak JSON lengkap (task + result)
+didokumentasikan di `bridge/README.md` ("Browser takeover tasks (v9)").
+Dialog persetujuan di Android adalah follow-up, bukan bagian ini.
+
+Banner takeover (`src/ui/TakeoverBanner.ts`, baru; wiring di `src/ui/main.ts`):
+saat tugas bridge berjalan, panel menampilkan "MOBIUS sedang mengendalikan
+browser — klik untuk mengambil alih". Klik menulis flag `mobius_takeover` ke
+`chrome.storage.local`; KEDUA poller menghormatinya (panel `setInterval` 3 dtk
+dan alarm worker `mobius-bridge-poll` 1 mnt tidak klaim tugas baru selama
+flag aktif; tugas yang sedang berjalan dibiarkan selesai). Banner lalu
+menjadi "MOBIUS dijeda — Anda mengendalikan browser. Klik untuk melanjutkan."
+dan tetap tampil selama flag aktif (klik lagi = resume) — sengaja, supaya
+flag selalu bisa dihapus dari panel. Status berjalan diumumkan lewat key
+`mobius_bridge_running` (ditulis kedua poller, dihapus saat selesai; entri
+>120 dtk dianggap basi). Teks banner hardcode Bahasa Indonesia (`i18n.ts`
+tidak boleh diedit workstream ini). Tidak ada perubahan tampilan lain.
+
+### Build & verifikasi v9-takeover
+- `tsc --noEmit` (BUKAN `npm run build` — tidak ada `dist` yang ditulis,
+  sesuai aturan paralel): 0 error di SEMUA file workstream ini
+  (`types.ts`, `Orchestrator.ts`, `BridgeClient.ts`, `main.ts`,
+  `service-worker.ts`, `TakeoverBanner.ts`). Satu error tersisa di
+  `src/core/WebSkillTools.ts(399,11)` (`Property 'click' does not exist on
+  type 'Element'`) — file itu BUKAN milik workstream ini dan sedang diedit
+  builder lain saat pengecekan; dicatat, tidak disentuh. (Error ini kemudian
+  diperbaiki builder WA Web dengan cast ke `HTMLElement` — lihat v9-waweb.)
+- Grep secret di 7 file workstream ini: BERSIH — tidak ada api key / token /
+  password / secret. `X-Mobius-Token` hanya muncul sebagai nama header dan
+  field `bridgeToken` di settings (nilai tidak pernah ada di kode); token
+  tetap hanya diisi user di Settings laptopnya sendiri.
+- Tidak ada push GitHub. Tidak ada `npm run build` (agen verifikasi yang
+  akan build setelah kode mendarat).
+
+### Yang belum dites live (butuh laptop + HP Tuan — lihat daftar kasus tes)
+- Round-trip sungguhan HP -> bridge -> extension -> HP untuk ketiga tipe
+  tugas browser (panel terbuka ~3 dtk + eksekusi; panel tertutup sampai
+  ~60 dtk + eksekusi).
+- Banner tampil/hilang + klik takeover menghentikan klaim di KEDUA poller,
+  lalu resume lewat klik kedua.
+- Alur persetujuan ujung-ke-ujung (dialog Android BELUM DIBANGUN — follow-up
+  sisi HP; kontrak JSON sudah lengkap di `bridge/README.md`).
+- Navigasi/klik/ketik sungguhan di situs nyata (selector/struktur halaman
+  bisa berubah); tugas berjalan >60 dtk (lease) belum diuji.
+
+## 25 Nov 2026 — v9: skill baca WhatsApp Web (whatsapp_read)
+
+**Yang dibangun (workstream WA Web, file eksklusif workstream ini):**
+- **Skill baru `src/skills/whatsapp_read.json`** — "baca whatsapp Moko" /
+  "ringkas chat whatsapp dari Moko" -> ringkasan chat dikembalikan ke HP
+  lewat bridge result yang sudah ada. 4 langkah, `timeoutMs` 180000,
+  `maxSteps` 12, param wajib `contact`. READ-ONLY: tidak pernah mengirim
+  pesan, tidak pernah menyentuh kotak pesan / tombol kirim.
+- **4 tool baru di `src/core/WebSkillTools.ts`** (service-worker side,
+  DOM disentuh lewat `chrome.scripting.executeScript` — manifest sudah
+  memberi izin `scripting` + `<all_urls>`, jadi tidak ada perubahan
+  manifest dan tidak ada perubahan content script):
+  - `whatsappOpen`: pakai tab web.whatsapp.com yang sudah terbuka, atau
+    buka di tab aktif; injeksi `waCheckLogin()` (poll 20 dtk) — daftar
+    chat termuat = lanjut; halaman QR/login = GAGAL JUJUR ("WhatsApp Web
+    belum tertaut / belum login… pindai kode QR dengan HP…"); 20 dtk
+    tanpa keduanya = gagal jujur (mungkin masih memuat / tampilan berubah).
+  - `whatsappOpenChat`: normalisasi nama kontak (`normalizeWaContact` —
+    buang sisa kata query seperti "baca/pesan/whatsapp/dari"), ketik nama
+    di kotak cari daftar chat, klik baris `span[title]` yang cocok,
+    verifikasi header percakapan. Kontak tidak ketemu / panel tidak
+    terbuka = gagal jujur. MUTATING (klik + ketik) -> masuk
+    `DOM_MUTATING_TOOLS`, jadi gate `domActions` v8 berlaku: izin OFF =
+    skill ditolak utuh sebelum satu langkah pun jalan. Nama "terakhir" /
+    "terbaru" ditolak dengan pesan yang mengarahkan (skill ini butuh nama
+    kontak; pesan terakhir tanpa nama tetap lewat jalur wa-reply lama).
+  - `whatsappExtract`: scroll panel percakapan ke atas (s.d. 5x) untuk
+    memuat riwayat, baca maks. 30 pesan terakhir sebagai
+    "[HH:MM] pengirim: teks" (teks `[data-testid="msg-text"]` /
+    `.selectable-text`, waktu `[data-testid="msg-meta"]`, pengirim "Saya"
+    untuk `.message-out`, author grup bila ada, kalau tidak nama chat);
+    media-only jadi "[media/lampiran]"; transkrip dipotong <=6000 karakter
+    (yang terbaru dipertahankan).
+  - `whatsappSummarize`: `CloudAI.generate()` (model cloud yang sudah
+    ada, `gemini-3.8-flash`) HANYA bila izin `cloudAI` ON. Bila OFF atau
+    cloud gagal -> tetap sukses dengan TRANSKRIP MENTAH + catatan jujur
+    di depannya, bukan ringkasan palsu. Prompt Bahasa Indonesia, larang
+    tambah fakta dari luar.
+- **Registrasi** di `src/core/SkillRegistry.ts` (registry kini 3 skill).
+- **README.md**: bagian "WhatsApp Web read skill (v9)" — syarat jujur
+  (WA Web tertaut, tab terbuka, izin Read Page + DOM Actions ON, Allow
+  Cloud AI ON untuk ringkasan) + batas yang diketahui + 1 item checklist
+  tes perangkat.
+
+**Kendala yang ditemukan saat kerja (didokumentasikan, bukan disembunyikan):**
+- `Orchestrator.formatSkillResult()` (read-only untuk workstream ini)
+  HANYA merender `vars.prices` / `vars['prices.matches']` ke teks hasil
+  skill — jadi ringkasan WA disimpan di var bernama `prices`
+  (`storeAs: "prices"`). Nama var warisan skill harga; isinya ringkasan.
+  Bila workstream lain mengubah `formatSkillResult`, var ini harus ikut
+  diperbarui.
+- **Bug trigger nyaris-regresi, ketangkap tes (diperbaiki sebelum selesai):**
+  trigger generik `"whatsapp"` + aturan skor parsial (+1 per trigger yang
+  berbagi kata) membuat "balas whatsapp" cocok ke skill baca dengan skor
+  11 dan kontak "balas" — intent wa-reply lama akan dicuri lalu gagal.
+  Perbaikan: trigger minimal (maks. 2 trigger mengandung kata
+  "whatsapp": "baca whatsapp", "ringkas whatsapp") + normalisasi kontak
+  di sisi tool. Setelah perbaikan: "balas whatsapp" dan "balas pesan
+  whatsapp terakhir" TIDAK cocok ke skill mana pun (jalur wa-reply utuh);
+  "baca whatsapp Moko", "baca wa Moko", "ringkas chat whatsapp dari
+  Moko", "baca pesan whatsapp dari Moko", "read whatsapp Moko" cocok.
+- `skill.summarize` di JSON diparse tapi tidak dipakai runner/orchestrator
+  (sudah begitu sejak v7); ringkasan WA dikerjakan langkah
+  `whatsappSummarize` sendiri, jadi field itu `false` seperti skill harga.
+
+**Verifikasi — ✅ SUKSES (tanpa `npm run build`, tanpa dist):**
+- `npx tsc --noEmit` bersih, 0 error (1 error diperbaiki: `Element` tidak
+  punya `.click()` -> cast ke `HTMLElement` di `waOpenChatInPage`).
+- Tes logika esbuild (`/tmp/wa-test.ts`, tidak di-commit): **34 cek, semua
+  PASS** — parseSkill + 4 langkah + urutan tool; registry 3 skill; skor
+  cocok/tidak-cocok (termasuk "balas whatsapp" tidak cocok, Shopee/
+  Tokopedia tetap menang di query-nya); `normalizeWaContact` (termasuk
+  nama "Wati" tidak termakan strip "wa"); runner end-to-end dengan tool
+  palsu: `vars['prices.matches']` berisi ringkasan, `vars['extract.transcript']`
+  berisi transkrip mentah.
+- Grep secret di 4 file baru/berubah: TIDAK ADA secret/nilai kredensial.
+  Satu-satunya kata "token" di baris baru README adalah kalimat "No Google
+  account or token lives in the extension" (penjelasan, bukan nilai).
+  Token tetap hanya di HP; extension hanya memanggil model cloud Firebase
+  yang sudah dikonfigurasi.
+
+**Belum dites live (butuh laptop + HP Tuan — VM tetap read-only):**
+- Alur sungguhan: WA Web tertaut + tab terbuka -> "baca whatsapp Moko"
+  dari HP -> ringkasan kembali ke HP (panel terbuka ~3 dtk + eksekusi;
+  panel tertutup s.d. ~60 dtk + eksekusi, seperti skill lain).
+- Selektor DOM WhatsApp Web di dunia nyata (kotak cari, `span[title]`,
+  `.message-in/.message-out`, `[data-testid="msg-text"]` /
+  `[data-testid="msg-meta"]` / `[data-testid="chat-list-search"]`) —
+  fungsi injeksi di bawah `src/core/WebSkillTools.ts` adalah tempat
+  pertama yang diperiksa bila skill mulai gagal setelah WhatsApp mengubah
+  tampilan web-nya.
+- Perilaku bila izin DOM Actions OFF (harus: ditolak utuh sebelum langkah
+  1) dan bila cloud AI OFF (harus: transkrip mentah + catatan, bukan
+  ringkasan).
+- Penulis grup: di grup, nama pengirim per pesan jatuh kembali ke nama
+  chat bila WhatsApp tidak mengekspos elemen author.
+
+## v9 — "Open + show" (buka + tampilkan, 26 Nov 2026)
+
+Perintah "buka [situs] di laptop" → HP mengirim bridge task `browser_navigate`
+→ ekstensi navigasi ke URL itu dan MEMBIARKAN tab terbuka di halaman tersebut
+untuk dilihat user. Verifikasi kode (agen verifikasi): `handleBrowserTask`
+untuk `browser_navigate` hanya menjalankan langkah `navigate` lalu melaporkan
+url/title; tidak ada login, tidak ada isi kredensial, dan tidak ada
+`chrome.tabs.remove` di seluruh `src/` — tab dibiarkan terbuka. Harness Node
+(tab palsu): `browser_navigate` example.com + devpost.com → done, url/title
+cocok, tab tetap terbuka (PASS). **Belum dites di Chrome asli — butuh tes Tuan
+di laptop:** dari HP perintahkan buka example.com/devpost.com, periksa tab
+terbuka di halaman yang benar, tidak ada login terjadi, tab tetap terbuka
+setelah tugas selesai. Sisi Android (perintah dikenali di HP → dikirim sebagai
+`browser_navigate` via RemoteGateway) dibangun sebagai slice v7.9-tambahan
+(skill `laptop_browser_open`), bukan bagian v9 ekstensi.
+
+## v9 — Verifikasi (agen verifikasi, 26 Nov ~02:38 WIB)
+
+- `npm run build` (tsc + vite): 0 error. Zip
+  `~/workspace/your_files/mobius-extension-dist-v9.zip` (191.717 byte,
+  SHA-256 `9f9ad740e64544e7de84c66ddd0e7dc4070d381e42b3968b691685cee2a37667`),
+  12 file, struktur sama seperti v8.
+- Tes bridge (hasil lengkap di `bridge/TEST-LOG.md`, bagian v9): regresi
+  30/30 PASS, transport takeover 2/2 PASS, harness logika takeover 16/16
+  PASS (kode TS asli dibundle esbuild + `chrome` palsu + tab palsu).
+  Harness hanya membuktikan logika keputusan, BUKAN DOM Chrome asli.
+- Grep secret file v9: BERSIH. **Temuan pra-v9 (bukan dari builder v9):**
+  `src/config/firebase.ts` baris 31 berisi Firebase web apiKey live +
+  konfigurasi proyek `gen-lang-client-0936734513` (mtime 25 Nov 05:44,
+  sudah ada di zip v8). Secara teknis apiKey web adalah identifier klien,
+  bukan secret privat — tapi aturan "tidak ada secret/kunci di repo"
+  secara harfiah dilanggar. TIDAK diubah (di luar scope; menghapus bisa
+  merusak demo cloud). Keputusan Tuan/koordinator: batasi key di Google
+  Cloud Console (HTTP referrer/API restriction) atau ganti ke placeholder
+  + isi saat build.
+
+## v8.1 — Approval bertier + kartu approval lintas perangkat (builder #3, 26 Nov 2026)
+
+Pola nanoMuse Sentinel (GPL-3.0) — POLA SAJA, kode ditulis ulang sendiri;
+tidak ada kode nanoMuse yang disalin. Tanpa relay baru: tetap bridge lokal
+LAN port 8787; protokol v9 `awaiting_approval` diperpanjang.
+
+- `src/core/types.ts`: `pendingActions[]` membawa `tier` per aksi
+  (`moderate`/`sensitive`); `BrowserTaskResult` membawa `approvalId`
+  (opsional, hanya untuk `awaiting_approval`).
+- `src/core/Orchestrator.ts` (`handleBrowserTask`): aksi mutating tanpa
+  `approved=true` tetap tidak dieksekusi sama sekali; hasilnya kini berisi
+  tier per aksi (`submit` = sensitive, klik/ketik = moderate) + `approvalId`
+  (UUID) yang mengikat permintaan ini dengan pengiriman ulang yang disetujui.
+- `src/core/BridgeClient.ts`: `postOrchestratorResult` mengumumkan
+  `awaiting_approval` ke `chrome.storage.local` (`mobius_bridge_approval`)
+  dan membersihkannya saat tugas yang sama selesai; helper
+  `announce/clear/getApprovalPending` + `APPROVAL_PENDING_STALE_MS` (10 mnt).
+- `src/ui/ApprovalCard.ts` (BARU): kartu panel "Menunggu persetujuan di HP"
+  + daftar aksi + keterangan tier. READ-ONLY — tanpa tombol Setuju/Tolak
+  (keputusan tetap di HP). Wiring koordinator: 2 baris di `src/ui/main.ts`
+  (mount di samping TakeoverBanner).
+- `bridge/bridge.mjs` v0.3.0: POST /task menerima `approvalId` opsional
+  (string ≤128 karakter, 400 bila bukan string/terlalu panjang); bridge hanya
+  menyimpan + mengembalikan (GET /bridge/tasks/next, GET /task/:id) — id
+  tidak pernah menafsirkan/menyetujui apa pun sendiri.
+- `bridge/README.md`: protokol diperbarui (tier + approvalId + alur kirim ulang).
+- `npm run build` (tsc + vite): 0 error.
+- Tes bridge (Node, server lokal port 18787, token tes): 7/7 PASS
+  (POST + approvalId, echo di next + /task/:id, absen bila tidak ada,
+  400 untuk non-string dan >128 karakter, /health v0.3.0).
+- Keputusan HP ada di sisi Android (`RemoteGateway.sendBrowserTaskAndWait`,
+  `ApprovalGrants`, `ui/ApprovalCard.kt`); ekstensi tidak menyimpan grant —
+  grants milik perangkat HP (on-device), sesuai kontrak sync nanoMuse C12.
+
+**Belum dites live (butuh laptop + HP Tuan):** kartu panel muncul saat
+tugas laptop menunggu approval; alur bolak-balik HP→laptop end-to-end di
+Chrome asli (persetujuan di HP → tugas jalan di laptop).
+
+## v8.1 — Integrasi (koordinator, 26 Nov 2026 ~04:10 WIB)
+
+- `src/ui/main.ts`: mount `ApprovalCard` di samping `TakeoverBanner` (2 baris +
+  import) — kartu panel "Menunggu persetujuan di HP" kini aktif di panel ekstensi.
+- `npm run build` (tsc + vite) setelah mount: 0 error. Bundle panel baru
+  `dist/assets/index-1v-UppmG.js` (263,85 kB); string "Menunggu persetujuan"
+  terverifikasi ada di bundle. Bundle lama `index-CjIhxcwk.js` (v9) masih ada di
+  repo sebagai file usang yang tidak berbahaya (pola yang sama seperti v8).
+- Bagian v8.1 di atas (ditulis builder #3) tetap berlaku: bridge v0.3.0 smoke
+  7/7 PASS, `npm run build` 0 error (2x sebelum mount koordinator).
+
+## v9.1 — Kartu approval bilingual ID+EN + hapus jargon (26 Nov 2026 ~04:30 WIB)
+
+- **Masalah:** pesan `awaiting_approval` di `src/core/Orchestrator.ts` menulis jargon
+  "Kirim ulang tugas yang sama dengan approved=true untuk menjalankan." — teks itu
+  dikirim bridge ke HP dan ditampilkan verbatim di dialog approval Android.
+  Deskripsi aksi (`describeBrowserAction`) dan kartu panel (`src/ui/ApprovalCard.ts`)
+  juga hardcode bahasa Indonesia.
+- **Perbaikan:** `src/core/i18n.ts` +13 kunci (awaitingApproval, awaitingApprovalAt,
+  actClickText/TypeText/Submit/Navigate/Scroll/Back/Home, approvalCardTitle/Hint/
+  HintSensitive/At) ID+EN. `Orchestrator.ts`: pesan awaiting via `tf()`, deskripsi
+  aksi via `t()`/`tf()`. `ApprovalCard.ts`: judul/hint/`di {url}` via `t()`/`tf()`.
+  `bridge/README.md`: 2 contoh pesan diperbarui ke teks baru.
+- **Verifikasi:** `npm run build` (tsc + vite) 0 error. Bundle panel baru
+  `dist/assets/index-CXv24ITq.js` (265,50 kB); "Waiting for approval" 3x di bundle;
+  kalimat jargon 0 di semua bundle (sisa `approved` di background.js hanya kode
+  protokol + komentar, bukan teks pengguna). Zip
+  `~/workspace/your_files/mobius-extension-dist-v9.1.zip` (194.116 B, 12 file).
+- **Belum dites live:** kartu panel + dialog HP dalam bahasa Inggris (butuh laptop +
+  HP Tuan, seperti v9).

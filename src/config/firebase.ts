@@ -4,10 +4,17 @@
 // Create a free Firebase project (Spark plan, $0) at https://console.firebase.google.com
 //   1. Project settings -> "Your apps" -> Web app -> copy the firebaseConfig values.
 //   2. Build -> AI Logic -> enable Gemini API (Vertex AI or Gemini Developer API backend).
-//   3. Build -> App Check -> register this web app, enable the debug provider for
-//      hackathon judging (see docs/PERMISSIONS.md), and paste the debug token below
-//      OR set it in the browser console: self.FIREBASE_APPCHECK_DEBUG_TOKEN = '<token>'.
-//   4. (Optional) ReCaptcha Enterprise site key for production App Check.
+//   3. Build -> App Check -> register this web app. HONEST NOTE (v8): a
+//      debug token ALONE does NOT activate App Check — the Firebase JS SDK
+//      has no public DebugProvider for web, and the
+//      FIREBASE_APPCHECK_DEBUG_TOKEN global is only honored when App Check is
+//      initialized with a REAL provider (e.g. ReCaptchaEnterpriseProvider
+//      below). Pasting a debug token without a reCAPTCHA site key leaves App
+//      Check OFF (a clear warning is logged — see initAppCheck). That is
+//      fine while App Check enforcement is OFF in the Firebase console
+//      (monitoring only): cloud AI calls work without App Check.
+//   4. ReCaptcha Enterprise site key — the step that actually turns App
+//      Check on (optional for the demo, required for real App Check).
 //
 // DO NOT commit real keys to a public repo. For the hackathon submission the
 // placeholders below keep the extension compiling and running in local-only
@@ -68,18 +75,35 @@ export function getFirebaseApp(): FirebaseApp {
 function initAppCheck(firebaseApp: FirebaseApp): void {
   if (appCheckReady) return;
   try {
-    // Debug-token support (required path for hackathon judging):
-    // a debug token lets App Check pass without a real reCAPTCHA challenge.
+    // Debug-token support: the token global is set when present, but on its
+    // own it does NOTHING — the Firebase JS SDK has no public DebugProvider
+    // for web, and the global is only honored when App Check is initialized
+    // with a real provider (ReCaptchaEnterpriseProvider below). Say so loudly
+    // instead of letting anyone believe a pasted token means "App Check on".
     const g = globalThis as unknown as Record<string, unknown>;
-    if (APP_CHECK_DEBUG_TOKEN !== 'PASTE_YOUR_APP_CHECK_DEBUG_TOKEN_HERE') {
+    const hasDebugToken = APP_CHECK_DEBUG_TOKEN !== 'PASTE_YOUR_APP_CHECK_DEBUG_TOKEN_HERE';
+    const hasRecaptchaKey = RECAPTCHA_ENTERPRISE_SITE_KEY !== 'PASTE_YOUR_RECAPTCHA_ENTERPRISE_SITE_KEY_HERE';
+    if (hasDebugToken) {
       g.FIREBASE_APPCHECK_DEBUG_TOKEN = APP_CHECK_DEBUG_TOKEN;
     }
-    if (RECAPTCHA_ENTERPRISE_SITE_KEY !== 'PASTE_YOUR_RECAPTCHA_ENTERPRISE_SITE_KEY_HERE') {
+    if (hasRecaptchaKey) {
       initializeAppCheck(firebaseApp, {
         provider: new ReCaptchaEnterpriseProvider(RECAPTCHA_ENTERPRISE_SITE_KEY),
         isTokenAutoRefreshEnabled: true,
       });
       appCheckReady = true;
+    } else if (hasDebugToken) {
+      console.warn(
+        '[MOBIUS] App Check NOT initialized: a debug token is set, but there is no reCAPTCHA Enterprise site key, ' +
+          'and the Firebase JS SDK has no public DebugProvider for web — a debug token alone cannot turn App Check on. ' +
+          'Cloud AI calls will run WITHOUT App Check. That is fine while App Check enforcement is OFF in the Firebase ' +
+          'console (monitoring only). To actually enable App Check, set RECAPTCHA_ENTERPRISE_SITE_KEY.',
+      );
+    } else {
+      console.info(
+        '[MOBIUS] App Check is OFF (no debug token, no reCAPTCHA site key). Cloud AI calls run without it; ' +
+          'fine while App Check enforcement is OFF in the Firebase console.',
+      );
     }
   } catch (err) {
     // App Check must never crash the core: AI Logic calls will surface the failure.

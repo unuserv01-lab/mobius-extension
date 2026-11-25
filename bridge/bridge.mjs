@@ -40,7 +40,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const TASK_TTL_MS = 10 * 60 * 1000; // tasks expire after 10 minutes
 // Lease (v8): a claimed task is leased, not owned forever. If the extension
 // dies mid-task (service worker suspended, laptop asleep), the lease expires
@@ -285,7 +285,7 @@ function resolveInsideRoot(p) {
 // requeued task is rejected with 409, so a stale worker can never overwrite
 // the outcome of the re-run.
 // ---------------------------------------------------------------------------
-const tasks = new Map(); // id -> { taskId, text, source, status, result, createdAt, expiresAt, attempts, claimedAt, leaseExpiresAt }
+const tasks = new Map(); // id -> { taskId, text, source, status, result, createdAt, expiresAt, attempts, claimedAt, leaseExpiresAt, approvalId }
 function sweepTasks() {
   const now = Date.now();
   for (const [id, t] of tasks) {
@@ -436,6 +436,14 @@ const server = http.createServer(async (req, res) => {
       if (typeof body?.text !== 'string' || !body.text.trim()) { sendError(res, 400, 'text must be a non-empty string'); return; }
       if (body.text.length > 10000) { sendError(res, 413, 'text too long (max 10000 chars)'); return; }
       if (body.source !== undefined && typeof body.source !== 'string') { sendError(res, 400, 'source must be a string'); return; }
+      // (v8.1) approvalId: opaque link between an awaiting_approval result
+      // and the phone's resubmission with approved=true. The bridge never
+      // interprets it — it only stores and echoes it — so a wrong/missing id
+      // can never approve anything by itself; approval still requires the
+      // phone to send approved=true AND the extension to see it.
+      if (body.approvalId !== undefined && (typeof body.approvalId !== 'string' || body.approvalId.length > 128)) {
+        sendError(res, 400, 'approvalId must be a string of at most 128 chars'); return;
+      }
       sweepTasks();
       const taskId = crypto.randomUUID();
       const now = Date.now();
@@ -450,6 +458,7 @@ const server = http.createServer(async (req, res) => {
         attempts: 0,
         claimedAt: null,
         leaseExpiresAt: null,
+        approvalId: body.approvalId ?? null,
       });
       sendJson(res, 202, { accepted: true, taskId });
       return;
@@ -466,7 +475,9 @@ const server = http.createServer(async (req, res) => {
           t.attempts += 1;
           t.claimedAt = Date.now();
           t.leaseExpiresAt = t.claimedAt + LEASE_MS;
-          sendJson(res, 200, { task: { taskId: t.taskId, text: t.text, source: t.source, createdAt: t.createdAt, attempts: t.attempts } });
+          const taskOut = { taskId: t.taskId, text: t.text, source: t.source, createdAt: t.createdAt, attempts: t.attempts };
+          if (t.approvalId) taskOut.approvalId = t.approvalId; // (v8.1) echo, bila ada
+          sendJson(res, 200, { task: taskOut });
           return;
         }
       }
@@ -506,6 +517,7 @@ const server = http.createServer(async (req, res) => {
         const t = tasks.get(decodeURIComponent(m[1]));
         if (!t) { sendError(res, 404, 'unknown task id'); return; }
         const out = { taskId: t.taskId, status: t.status, attempts: t.attempts };
+        if (t.approvalId) out.approvalId = t.approvalId; // (v8.1) echo, bila ada
         if (t.result !== null && t.result !== undefined) out.result = t.result;
         sendJson(res, 200, out);
         return;

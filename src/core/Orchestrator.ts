@@ -13,7 +13,7 @@ import { SkillRunner } from './SkillRunner';
 import { TaskRouter } from './TaskRouter';
 import { DOM_MUTATING_TOOLS, WebSkillTools } from './WebSkillTools';
 import type { Skill } from './Skill';
-import type { MobiusSettings, MobiusTask, TaskResult } from './types';
+import type { BrowserAction, BrowserStepResult, BrowserTaskPayload, BrowserTaskResult, MobiusSettings, MobiusTask, TaskResult } from './types';
 
 export class Orchestrator {
   private permissions = new PermissionManager();
@@ -39,6 +39,12 @@ export class Orchestrator {
     await loadLanguage();
     const settings = await this.getSettings();
 
+    // Browser takeover (v9): a structured task from the bridge never goes
+    // through skill match or LLM routing — it runs deterministically below.
+    if (task.browserTask) {
+      return this.handleBrowserTask(task, settings);
+    }
+
     // Skills first: a clear keyword match runs deterministically (no LLM).
     const skillMatch = this.taskRouter.matchSkill(task.input);
     if (skillMatch) {
@@ -57,6 +63,164 @@ export class Orchestrator {
     }
 
     return this.runWithAgent(task, route.agentType, settings, /* insertIntoPage */ true);
+  }
+
+  /**
+   * Browser takeover (v9): run a structured task from the phone through
+   * WebSkillTools and report back a BrowserTaskResult JSON (as TaskResult
+   * text — the pollers post it verbatim to the bridge).
+   *
+   * APPROVAL PROTOCOL (fail closed): a task whose actions include a mutating
+   * tool (clickText / typeText / submit — DOM_MUTATING_TOOLS) does NOT
+   * execute AT ALL unless payload.approved === true. Not even the navigation
+   * runs. The extension returns status 'awaiting_approval' with a plain
+   * description of every held-back action; the phone shows its approval
+   * dialog and, if the user agrees, sends a NEW task with the same
+   * type/url/actions plus approved=true. The permission gates still apply
+   * on top: approved=true with domActions OFF fails honestly.
+   *
+   * HONESTY: a navigation that fails, an element that is not found, or a
+   * read with no matches ends the run at that step with status 'failed' —
+   * steps already done are reported, nothing is claimed that did not happen.
+   * Only short summaries (never page content) go to the router log.
+   */
+  private async handleBrowserTask(task: MobiusTask, settings: MobiusSettings): Promise<TaskResult> {
+    const started = Date.now();
+    const payload = task.browserTask as BrowserTaskPayload;
+    const type = payload.type;
+    const steps: BrowserStepResult[] = [];
+    const tools = new WebSkillTools();
+    let collectedText = '';
+
+    const finish = async (result: BrowserTaskResult): Promise<TaskResult> => {
+      const summary = `${type}${result.url ? ` — ${result.url}` : ''}: ${result.message}`;
+      await this.aiRouter.log({
+        taskId: task.id,
+        taskSummary: summary.slice(0, 80),
+        engine: 'skill',
+        reason: `browser ${type}, ${result.steps.length} steps, ${result.status}`,
+        latencyMs: Date.now() - started,
+        cloudAllowed: await this.permissions.isAllowed('cloudAI'),
+        payloadSummary: `browser ${type}, ${result.steps.length} steps, ${result.status}`,
+      });
+      const retention = settings.chatRetentionSeconds ?? DEFAULT_CHAT_RETENTION_SECONDS;
+      await this.chatHistory.add('user', `[browser] ${summary.slice(0, 120)}`, retention);
+      await this.chatHistory.add('assistant', result.message.slice(0, 200), retention);
+      return {
+        taskId: task.id,
+        ok: result.status === 'done',
+        engine: 'skill',
+        text: JSON.stringify(result),
+        provenance: 'Browser task (remote, via bridge)',
+        error: result.status === 'failed' ? result.error : undefined,
+      };
+    };
+
+    const fail = (error: string): Promise<TaskResult> =>
+      this.activeTabInfo().then(({ url, title }) =>
+        finish({ status: 'failed', type, url, title, steps, message: error, error }),
+      );
+
+    // --- Validation: fail before touching the browser. ---
+    if ((type === 'browser_navigate' || type === 'browser_read') && !payload.url) {
+      return finish({ status: 'failed', type, url: '', title: '', steps, message: `${type} needs a url.`, error: `${type} needs a url.` });
+    }
+    if (type === 'browser_act' && (!payload.actions || payload.actions.length === 0)) {
+      return finish({ status: 'failed', type, url: payload.url ?? '', title: '', steps, message: 'browser_act needs at least one action.', error: 'browser_act needs at least one action.' });
+    }
+    const actions = payload.actions ?? [];
+
+    // --- Approval gate: mutating actions without approved=true run NOTHING. ---
+    // (v8.1) Each held-back action carries its tier (submit = sensitive,
+    // click/type = moderate) so the phone can decide whether the approval
+    // may be remembered, and a stable approvalId so the phone's resubmission
+    // can be linked to this hold (see bridge/README.md).
+    const mutating = actions.filter((a) => DOM_MUTATING_TOOLS.has(a.tool));
+    if (mutating.length > 0 && payload.approved !== true) {
+      const pendingActions = mutating.map((a) => ({
+        tool: a.tool,
+        description: describeBrowserAction(a),
+        tier: browserActionTier(a.tool),
+      }));
+      const what = pendingActions.map((p) => p.description).join('; ');
+      const approvalId = crypto.randomUUID();
+      // Plain language, no protocol jargon: the phone shows this message
+      // verbatim in the approval dialog (ID+EN via i18n).
+      const message = payload.url
+        ? tf('awaitingApprovalAt', { what, url: payload.url })
+        : tf('awaitingApproval', { what });
+      return finish({
+        status: 'awaiting_approval',
+        type,
+        url: payload.url ?? '',
+        title: '',
+        steps,
+        pendingActions,
+        approvalId,
+        message,
+      });
+    }
+
+    // --- Permission gates (on top of approval). ---
+    if (mutating.length > 0 && !(await this.permissions.isAllowed('domActions'))) {
+      return fail(`domActions permission is off — ${this.permissions.denialMessage('domActions')}`);
+    }
+    const readsPage = type === 'browser_read' || actions.some((a) => a.tool === 'readScreen' || a.tool === 'extract' || a.tool === 'findText');
+    if (readsPage && !(await this.permissions.isAllowed('readPage'))) {
+      return fail(`readPage permission is off — ${this.permissions.denialMessage('readPage')}`);
+    }
+
+    // --- Navigate first (when a URL was given). ---
+    if (payload.url) {
+      const nav = await tools.call('navigate', { url: payload.url });
+      steps.push({ tool: 'navigate', ok: nav.success, message: nav.message });
+      if (!nav.success) return fail(`Could not open ${payload.url}: ${nav.message}`);
+    }
+
+    // --- Run the steps. browser_read always reads the page; browser_act runs
+    // its actions in order and stops at the first failed step. ---
+    const runList: BrowserAction[] = type === 'browser_read' ? [{ tool: 'readScreen', limit: '200' }, ...actions] : actions;
+    for (const action of runList) {
+      if (type === 'browser_navigate') break;
+      const args: Record<string, string> = {};
+      for (const [k, v] of Object.entries(action)) {
+        if (k === 'tool' || v === undefined) continue;
+        args[k] = String(v);
+      }
+      const out = await tools.call(action.tool, args);
+      steps.push({ tool: action.tool, ok: out.success, message: out.message });
+      if (out.data?.text) collectedText += `${out.data.text}\n`;
+      if (out.data?.matches) collectedText += `${out.data.matches}\n`;
+      if (!out.success) {
+        return fail(`Step '${action.tool}' failed: ${out.message}`);
+      }
+    }
+
+    const { url, title } = await this.activeTabInfo();
+    const doneCount = steps.filter((s) => s.ok).length;
+    return finish({
+      status: 'done',
+      type,
+      url,
+      title,
+      steps,
+      text: collectedText ? collectedText.slice(0, 2000) : undefined,
+      message:
+        type === 'browser_navigate'
+          ? `Opened ${url}${title ? ` — ${title}` : ''}.`
+          : `${type} selesai: ${doneCount}/${steps.length} langkah OK${title ? ` — ${title}` : ''}.`,
+    });
+  }
+
+  /** URL + title of the active tab ('' when there is no tab — never throws). */
+  private async activeTabInfo(): Promise<{ url: string; title: string }> {
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = tabs[0];
+      return { url: tab?.url ?? '', title: tab?.title ?? '' };
+    } catch {
+      return { url: '', title: '' };
+    }
   }
 
   /** Deterministic skill run (no LLM): navigate the web, read, extract. */
@@ -189,5 +353,42 @@ export class Orchestrator {
   }
   getAIRouter(): AIRouter {
     return this.aiRouter;
+  }
+}
+
+/** Risk tier of one browser action (v8.1 — mirrors ActionGate on Android).
+ * submit sends something: sensitive, always ask, never remember forever.
+ * clickText / typeText / whatsappOpenChat change state reversibly: moderate,
+ * the phone MAY remember the approval. Reads never reach this function. */
+function browserActionTier(tool: string): 'moderate' | 'sensitive' {
+  return tool === 'submit' ? 'sensitive' : 'moderate';
+}
+
+/** Plain-language description of one action, for the approval dialog on the
+ * phone (pendingActions[].description). Values are capped at 80 chars so the
+ * awaiting_approval result stays small; the phone already holds the full
+ * task, this is only what the user reads before approving. ID+EN via i18n. */
+function describeBrowserAction(action: BrowserAction): string {
+  const cap = (v: unknown): string => {
+    const s = String(v ?? '');
+    return s.length > 80 ? `${s.slice(0, 80)}…` : s;
+  };
+  switch (action.tool) {
+    case 'clickText':
+      return tf('actClickText', { text: cap(action.text) });
+    case 'typeText':
+      return tf('actTypeText', { text: cap(action.text) });
+    case 'submit':
+      return t('actSubmit');
+    case 'navigate':
+      return tf('actNavigate', { url: cap(action.url) });
+    case 'scroll':
+      return t('actScroll');
+    case 'back':
+      return t('actBack');
+    case 'home':
+      return t('actHome');
+    default:
+      return action.tool;
   }
 }

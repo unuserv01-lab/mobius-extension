@@ -1,6 +1,6 @@
 // Shared message / task types for MOBIUS (core <-> content script <-> side panel).
 
-export type TaskIntent = 'wa-reply' | 'summarize' | 'chat' | 'skill';
+export type TaskIntent = 'wa-reply' | 'summarize' | 'chat' | 'skill' | 'browser';
 
 /** Language of the UI (side panel + bubble). Default 'id'. */
 export type Language = 'id' | 'en';
@@ -13,6 +13,84 @@ export interface MobiusTask {
   url?: string;
   /** Optional page text already read by the content script (kept local). */
   pageText?: string;
+  /** Browser-takeover payload (v9): set only when the task came from the
+   * bridge as a structured browser task (see parseBrowserTask in
+   * BridgeClient.ts). When present, the Orchestrator runs it through
+   * handleBrowserTask() and never through skill match / LLM routing. */
+  browserTask?: BrowserTaskPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Browser takeover (v9) — remote control of the laptop browser from the phone
+// via the bridge. The phone POSTs /task with `text` = a JSON string (the
+// bridge only carries plain text); the extension parses it with
+// parseBrowserTask() and attaches the payload here. Full contract (task +
+// result JSON) is documented in bridge/README.md.
+// ---------------------------------------------------------------------------
+
+/** Task type of a browser-takeover task (the `type` field of the JSON text). */
+export type BrowserTaskType = 'browser_navigate' | 'browser_read' | 'browser_act';
+
+/** One step inside a browser_act task. `tool` is a WebSkillTools tool name
+ * (navigate / clickText / typeText / submit / readScreen / findText /
+ * extract / scroll / back / home / wait / waitForText); the remaining fields
+ * are that tool's string args. */
+export interface BrowserAction {
+  tool: string;
+  [key: string]: string | boolean | number | undefined;
+}
+
+/** A parsed browser-takeover task. `approved` gates mutating actions:
+ * clickText / typeText / submit NEVER run unless approved === true
+ * (fail closed — see handleBrowserTask in Orchestrator.ts). */
+export interface BrowserTaskPayload {
+  type: BrowserTaskType;
+  /** Target URL (required for browser_navigate / browser_read; optional for
+   * browser_act, which may act on the current page instead). */
+  url?: string;
+  /** Steps for browser_act (and optional extra reads for browser_read). */
+  actions?: BrowserAction[];
+  /** Phone-side approval for mutating actions. Absent/false = not approved. */
+  approved?: boolean;
+}
+
+/** One executed step, as reported back to the phone. */
+export interface BrowserStepResult {
+  tool: string;
+  ok: boolean;
+  message: string;
+}
+
+/** Structured result of a browser task, serialized as the TaskResult text
+ * (and as the bridge result string). The phone parses this JSON. */
+export interface BrowserTaskResult {
+  /** done = executed; failed = honest failure (page / element / permission);
+   * awaiting_approval = mutating actions held back, nothing was executed. */
+  status: 'done' | 'failed' | 'awaiting_approval';
+  type: BrowserTaskType;
+  /** Final URL of the active tab after the task ('' when no tab). */
+  url: string;
+  /** Page title of the active tab after the task ('' when no tab). */
+  title: string;
+  steps: BrowserStepResult[];
+  /** Extracted page text (capped) — only for browser_read / read steps. */
+  text?: string;
+  /** Only for awaiting_approval: the mutating actions that were NOT run.
+   * `tier` (v8.1) is the risk tier of that action: 'moderate' (reversible
+   * mutation — the phone MAY remember the approval) or 'sensitive'
+   * (irreversible / send / delete — the phone must ask every time and
+   * must never remember it forever). */
+  pendingActions?: { tool: string; description: string; tier?: 'moderate' | 'sensitive' }[];
+  /** (v8.1) Only for awaiting_approval: stable id linking this hold to the
+   * resubmitted approved task. The phone echoes it back as `approvalId`
+   * when it resends the task with approved=true (see bridge/README.md);
+   * the bridge also accepts it on POST /task and returns it on
+   * GET /bridge/tasks/next and GET /task/:id. */
+  approvalId?: string;
+  /** Short human-readable summary (also stored in local chat history). */
+  message: string;
+  /** Only for failed: why it failed. */
+  error?: string;
 }
 
 export interface TaskResult {

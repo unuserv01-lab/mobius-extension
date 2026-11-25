@@ -162,6 +162,176 @@ untuk tes). Sweep tiap 30 detik (`MOBIUS_BRIDGE_SWEEP_MS`, hanya untuk tes):
 - Setelah **3 kali claim** tanpa hasil → `expired`.
 - TTL keseluruhan **10 menit** tetap menang atas segalanya.
 
+### Browser takeover tasks (v9) — HP mengendalikan browser laptop
+
+Tugas biasa (`text` polos) tetap jalan seperti v8 (chat/skill). Untuk
+mengendalikan browser, HP mengirim `text` berupa **string JSON** — bridge
+hanya membawa teks polos, jadi struktur tugas di-encode di dalam `text`.
+Extension mendeteksi JSON dengan field `type` `browser_*` dan menjalankannya
+secara deterministik (tanpa LLM, tanpa skill match) lewat `WebSkillTools`.
+
+#### Bentuk task (POST /task, field `text` = JSON string ini)
+
+```json
+{ "type": "browser_navigate", "url": "https://example.com" }
+```
+
+```json
+{ "type": "browser_read", "url": "https://example.com/artikel" }
+```
+
+```json
+{
+  "type": "browser_act",
+  "url": "https://example.com/login",
+  "actions": [
+    { "tool": "typeText", "text": "nama pengguna" },
+    { "tool": "clickText", "text": "Masuk" },
+    { "tool": "waitForText", "text": "Beranda", "timeoutMs": "5000" },
+    { "tool": "readScreen", "limit": "200" }
+  ],
+  "approved": false
+}
+```
+
+| Field | Arti |
+| --- | --- |
+| `type` | `browser_navigate` (buka URL saja), `browser_read` (buka URL + baca isi halaman), atau `browser_act` (buka URL bila ada + jalankan `actions` berurutan). `type` lain / JSON rusak / teks polos = tugas biasa v8, TIDAK pernah dieksekusi sebagai browser task. |
+| `url` | Wajib untuk `browser_navigate` dan `browser_read`; opsional untuk `browser_act` (tanpa `url`, aksi jalan di tab aktif saat ini). |
+| `actions` | Daftar langkah `browser_act` (dan bacaan tambahan untuk `browser_read`). Setiap langkah: `{ "tool": "<nama tool>", ...argumen string }`. Tool yang tersedia = tool `WebSkillTools`: `navigate`, `clickText`, `typeText`, `submit`, `readScreen`, `findText`, `extract`, `scroll`, `back`, `home`, `wait`, `waitForText`. Langkah pertama yang gagal menghentikan tugas (langkah sesudahnya tidak jalan). |
+| `approved` | Persetujuan untuk aksi mutating — lihat protokol di bawah. Default `false`. |
+| `approvalId` | (v8.1, opsional) Id yang mengikat pengiriman ulang yang disetujui dengan hasil `awaiting_approval` sebelumnya — HP mengisi ini dari field `approvalId` hasil tersebut (juga bisa dikirim sebagai field `approvalId` di POST /task). Bridge hanya menyimpan + mengembalikannya, tidak pernah menafsirkan: id yang salah/tidak ada tidak bisa menyetujui apa pun dengan sendirinya. |
+
+Navigasi memakai tab aktif (atau tab baru bila belum ada); setelah navigasi,
+extension menunggu halaman selesai dimuat (maks. 20 detik). `extract` butuh
+field `pattern` (regex) dan opsional `max`; `waitForText` butuh `text` dan
+opsional `timeoutMs`.
+
+#### Bentuk result (POST /bridge/tasks/:id/result, field `result` = JSON string ini)
+
+Extension selalu mengembalikan result berupa **JSON string** dengan bentuk:
+
+```json
+{
+  "status": "done",
+  "type": "browser_read",
+  "url": "https://example.com/artikel",
+  "title": "Judul Halaman",
+  "steps": [
+    { "tool": "navigate", "ok": true, "message": "Opened https://example.com/artikel" },
+    { "tool": "readScreen", "ok": true, "message": "…" }
+  ],
+  "text": "isi halaman yang terbaca (maks. 2000 karakter)",
+  "message": "browser_read selesai: 2/2 langkah OK — Judul Halaman."
+}
+```
+
+Untuk `awaiting_approval`, result membawa dua field tambahan (v8.1):
+
+```json
+{
+  "status": "awaiting_approval",
+  "type": "browser_act",
+  "url": "https://example.com/...",
+  "title": "",
+  "steps": [],
+  "pendingActions": [
+    { "tool": "clickText", "description": "Klik teks \"Beli\"", "tier": "moderate" },
+    { "tool": "submit", "description": "Kirim/submit formulir", "tier": "sensitive" }
+  ],
+  "approvalId": "3f9a…c21e",
+  "message": "Menunggu persetujuan: Klik teks \"Beli\"; Kirim/submit formulir di https://example.com/.... Tugas ini menunggu persetujuan Tuan di HP. Setelah Tuan menyetujui, laptop akan menjalankannya."
+}
+```
+
+| `pendingActions[].tier` | Arti |
+| --- | --- |
+| `moderate` | Aksi mengubah state tapi reversibel (klik/ketik). HP BOLEH mengingat persetujuan ini (sekali / chat ini / selamanya). |
+| `sensitive` | Aksi irreversible / kirim (`submit`). HP SELALU bertanya; TIDAK BOLEH diingat selamanya (maksimal "chat ini"). |
+
+| `status` | Arti | Status bridge (`POST result`) |
+| --- | --- | --- |
+| `done` | Semua langkah berhasil. | `done` |
+| `failed` | Gagal secara jujur — halaman tidak bisa dimuat, elemen tidak ditemukan, tidak ada tab, permission `readPage`/`domActions` mati, atau tugas tidak valid (mis. `browser_read` tanpa `url`). `steps` berisi langkah yang sudah jalan, `error` berisi alasannya. | `failed` |
+| `awaiting_approval` | Tugas mutating ditahan — TIDAK ADA yang dieksekusi, bahkan navigasi. Lihat protokol persetujuan. | `done` (extension selesai memproses; HP harus menampilkan dialog persetujuan) |
+
+`url`/`title` = tab aktif setelah tugas (string kosong bila tidak ada tab).
+`text` hanya ada bila ada langkah baca. HP membaca hasil lewat
+`GET /task/:id` lalu `JSON.parse(result)`.
+
+#### Protokol persetujuan (approval) — FAIL CLOSED
+
+Aturan keras: aksi yang **mengubah** halaman — `clickText`, `typeText`,
+`submit` ( persis `DOM_MUTATING_TOOLS` di `src/core/WebSkillTools.ts`) —
+**TIDAK BOLEH dieksekusi tanpa persetujuan dari HP.** Baca saja
+(`navigate`, `readScreen`, `extract`, `findText`, `scroll`, `wait`,
+`waitForText`, `back`, `home`) tidak butuh persetujuan.
+
+Alur lengkap:
+
+```
+1. HP  POST /task { "text": "{\"type\":\"browser_act\",\"url\":\"...\",\"actions\":[{\"tool\":\"clickText\",\"text\":\"Beli\"}]}" }
+2. Ext GET  /bridge/tasks/next  -> klaim tugas
+3. Ext mendeteksi aksi mutating + approved != true
+    -> TIDAK mengeksekusi apa pun (tab tidak disentuh sama sekali)
+    -> POST result { "status": "done", "result": "<JSON awaiting_approval>" }
+4. HP  GET  /task/:id -> status done, result JSON:
+    {
+      "status": "awaiting_approval",
+      "type": "browser_act",
+      "url": "https://example.com/...",
+      "title": "",
+      "steps": [],
+      "pendingActions": [
+        { "tool": "clickText", "description": "Klik teks \"Beli\"", "tier": "moderate" }
+      ],
+      "approvalId": "3f9a…c21e",
+      "message": "Menunggu persetujuan: Klik teks \"Beli\" di https://example.com/.... Tugas ini menunggu persetujuan Tuan di HP. Setelah Tuan menyetujui, laptop akan menjalankannya."
+    }
+5. HP  menampilkan dialog persetujuan dari `pendingActions[].description`
+    + `url` ("MOBIUS akan: Klik teks \"Beli\" di https://... — Setuju?").
+    Dialog ini di sisi Android; extension tidak punya UI persetujuan
+    (panel laptop hanya menampilkan kartu "Menunggu persetujuan di HP").
+    Tier per aksi (`moderate`/`sensitive`) menentukan pilihan "ingat"
+    yang ditawarkan dialog: `moderate` boleh sekali/chat ini/selamanya,
+    `sensitive` hanya sekali/chat ini.
+6. Bila user SETUJU, HP mengirim tugas BARU (taskId baru) dengan isi yang
+    SAMA persis + "approved": true + "approvalId" yang sama:
+    { "type": "browser_act", "url": "...", "actions": [...], "approved": true, "approvalId": "3f9a…c21e" }
+    (boleh juga dikirim sebagai field `approvalId` di POST /task — bridge
+    mengembalikan id itu di GET /bridge/tasks/next dan GET /task/:id.)
+    -> extension mengeksekusi dan mengembalikan status done/failed seperti biasa.
+    Bila user MENOLAK, HP tidak mengirim apa-apa — tugas selesai sebagai
+    awaiting_approval, tidak ada efek samping.
+```
+
+Jaminan fail-closed (diuji di sisi extension):
+
+- `approved` absen, `false`, atau bukan boolean `true` → ditahan.
+- Tugas yang sudah disetujui (`approved: true`) TETAP butuh permission
+  `domActions` aktif di laptop; bila mati → `failed` jujur, tidak dieksekusi.
+- `pendingActions` hanya berisi aksi mutating — aksi baca dalam tugas yang
+  sama TIDAK ikut dieksekusi saat ditahan (tugas ditolak utuh, bukan
+  setengah jalan).
+- Tugas `awaiting_approval` adalah terminal: tugas follow-up yang disetujui
+  adalah tugas BARU (taskId baru, lease + attempts sendiri).
+
+#### Takeover: user mengambil alih browser (v9)
+
+Saat tugas bridge sedang berjalan, panel samping menampilkan banner
+**"MOBIUS sedang mengendalikan browser — klik untuk mengambil alih"**.
+Klik banner menulis flag `mobius_takeover = { active: true, at: <ms> }` ke
+`chrome.storage.local`. **Kedua poller menghormati flag ini**: panel
+(`setInterval` 3 detik) dan service worker (alarm `mobius-bridge-poll`
+1 menit) tidak mengklaim tugas baru selama flag aktif. Tugas yang sudah
+berjalan saat flag dipasang dibiarkan selesai. Banner berubah menjadi
+**"MOBIUS dijeda — Anda mengendalikan browser. Klik untuk melanjutkan."**
+dan tetap tampil selama flag aktif — klik lagi menghapus flag dan polling
+berlanjut. Tanpa flag aktif, banner hilang saat tidak ada tugas berjalan.
+Status tugas yang sedang berjalan diumumkan lewat key
+`mobius_bridge_running = { taskId, startedAt }` (ditulis kedua poller,
+dihapus saat tugas selesai; entri lebih tua dari 120 detik dianggap basi).
+
 ### `POST /bridge/tasks/:id/result` — extension mengembalikan hasil
 
 Request: `{ "status": "done", "result": "ringkasan..." }` atau
@@ -211,6 +381,12 @@ berapa kali tugas sudah di-claim.)
 ```
 Bila langkah 3–4 tidak selesai dalam 60 detik (lease), tugas kembali ke
 antrean dan diambil lagi — maksimal 3 percobaan (lihat "Lease & recovery").
+
+Untuk tugas browser (v9), langkah 3 adalah eksekusi deterministik
+`browser_navigate` / `browser_read` / `browser_act` dan langkah 4 membawa
+result JSON terstruktur (`done` / `failed` / `awaiting_approval`) — lihat
+"Browser takeover tasks (v9)" di atas, termasuk protokol persetujuan yang
+membuat langkah 3–4 berulang bila aksi mutating butuh persetujuan HP.
 
 Extension yang memanggil bridge harus memakai token yang sama dan
 mengirim header `X-Mobius-Token`. CORS diizinkan (`Access-Control-Allow-

@@ -80,12 +80,26 @@ HP Android --(Wi-Fi/LAN)--> bridge (port 8787) --(HTTP localhost)--> extension C
 
 **Honest polling design (v8):** the side panel polls every **3 s** while open (a live page can do that reliably). When the panel is closed, the service worker polls via `chrome.alarms` — Chrome enforces a **1-minute minimum** — so latency is up to ~60 s + execution time. The worker can also be suspended mid-task; the bridge lease (60 s, 3 attempts) requeues the task in that case. No long-poll: an MV3 service worker cannot reliably hold one. Remote tasks work best for skills + chat; page-dependent intents (summarize / reply) need an active tab and fail honestly without one.
 
+## WhatsApp Web read skill (v9)
+
+A deterministic skill (`src/skills/whatsapp_read.json`) that reads a WhatsApp Web chat and returns a summary to the phone. Trigger it from the phone or the bubble with e.g. **"baca whatsapp Moko"** or **"ringkas chat whatsapp dari Moko"**. It is **read-only: it never sends a message** — it only types the contact name into the chat-list search box and clicks a chat row to open it.
+
+**Requirements (honest — the skill fails with a plain message when any of these is missing):**
+
+1. **WhatsApp Web must be linked on the laptop.** Open https://web.whatsapp.com in Chrome on the laptop and pair it by scanning the QR code with the phone. If the QR/login page is showing, the skill stops with *"WhatsApp Web belum tertaut / belum login"* instead of pretending it read anything.
+2. **A web.whatsapp.com tab must be open in Chrome on the laptop.** The skill reuses that tab when one exists; if none is open, it opens WhatsApp Web in the active tab.
+3. **Permissions ON in the Side Panel:** "Read Page / DOM Context" (all skills need it) and "Cross-App DOM Actions" (the skill clicks a chat row and types in the search box — so it is refused whole when DOM actions are off, never run halfway).
+4. **"Allow Cloud AI" ON for the summary.** The summary is made by cloud Gemini (`CloudAI.generate`). When cloud AI is off — or the cloud call fails — the skill still returns the raw chat transcript with a clear note saying so, instead of a fake summary. No Google account or token lives in the extension: the token is only on the phone; the extension only calls the already-configured Firebase cloud model.
+
+**Known limits:** the skill reads the newest ~30 messages (transcript capped at ~6.000 chars for the cloud prompt); in group chats the per-message author falls back to the chat name when WhatsApp does not expose the author element; WhatsApp Web DOM selectors (`.message-in`, `[data-testid="msg-text"]`, `[data-testid="chat-list-search"]`, …) drift as WhatsApp updates its web client — if the skill starts failing on the live site, check the injected page functions at the bottom of `src/core/WebSkillTools.ts` first.
+
 ## Device test checklist (NOT verified in this VM — needs Tuan's laptop + phone)
 
 - [ ] **Nano (on-device):** Chrome 138+, Prompt API enabled, RAM ≥ 16 GB, VRAM > 4 GB, ≥ 22 GB free disk; Nano languages are EN/JA/ES/DE/FR — Indonesian is NOT fully supported. Check the Router Log: engine must read `on-device`, not a silent cloud fallback.
 - [ ] **Round-trip:** bridge running with `--lan` → phone sends a task → result appears on the phone (panel open: ~3 s + execution; panel closed: up to ~60 s + execution).
 - [ ] **Lease recovery:** kill the bridge mid-task / close the laptop lid — the task must return to `queued` and be delivered again (max 3 attempts), never silently lost.
 - [ ] **App Check:** with no reCAPTCHA key set, the console must show the clear "App Check NOT initialized" warning (not a silent pass).
+- [ ] **WhatsApp read skill (v9):** WA Web linked + tab open in laptop Chrome → phone sends "baca whatsapp Moko" → summary (or raw transcript + honest note when cloud AI is off) comes back to the phone. Also verify the honest failures: WA Web logged out (QR page) → clear "belum tertaut" failure, no fake success; contact name not in the chat list → clear "tidak ditemukan" failure; DOM actions OFF → skill refused whole before any step runs.
 
 ## Demo video shot list (≤ 3 minutes)
 

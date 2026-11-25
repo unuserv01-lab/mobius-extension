@@ -115,7 +115,20 @@ export type StringKey =
   | 'typePhone'
   | 'typeAccount'
   | 'typeEmail'
-  | 'typePassword';
+  | 'typePassword'
+  | 'awaitingApproval'
+  | 'awaitingApprovalAt'
+  | 'actClickText'
+  | 'actTypeText'
+  | 'actSubmit'
+  | 'actNavigate'
+  | 'actScroll'
+  | 'actBack'
+  | 'actHome'
+  | 'approvalCardTitle'
+  | 'approvalCardHint'
+  | 'approvalCardHintSensitive'
+  | 'approvalCardAt';
 
 const ID: Record<StringKey, string> = {
   navOnboarding: 'Onboarding',
@@ -235,6 +248,23 @@ const ID: Record<StringKey, string> = {
   typeAccount: 'nomor rekening',
   typeEmail: 'email',
   typePassword: 'kata sandi',
+  awaitingApproval:
+    'Menunggu persetujuan: {what}. Tugas ini menunggu persetujuan Tuan di HP. Setelah Tuan menyetujui, laptop akan menjalankannya.',
+  awaitingApprovalAt:
+    'Menunggu persetujuan: {what} di {url}. Tugas ini menunggu persetujuan Tuan di HP. Setelah Tuan menyetujui, laptop akan menjalankannya.',
+  actClickText: 'Klik teks "{text}"',
+  actTypeText: 'Ketik "{text}"',
+  actSubmit: 'Kirim/submit formulir',
+  actNavigate: 'Buka {url}',
+  actScroll: 'Scroll halaman',
+  actBack: 'Kembali ke halaman sebelumnya',
+  actHome: 'Ke halaman utama',
+  approvalCardTitle: 'Menunggu persetujuan di HP',
+  approvalCardHint:
+    'Buka HP untuk menyetujui atau menolak. Di HP kamu bisa memilih untuk mengingat persetujuan ini.',
+  approvalCardHintSensitive:
+    'Aksi sensitif — buka HP untuk menyetujui atau menolak. Persetujuan ini tidak bisa diingat selamanya.',
+  approvalCardAt: 'di {url}',
 };
 
 const EN: Record<StringKey, string> = {
@@ -355,6 +385,23 @@ const EN: Record<StringKey, string> = {
   typeAccount: 'bank account number',
   typeEmail: 'email',
   typePassword: 'password',
+  awaitingApproval:
+    'Waiting for approval: {what}. This task is waiting for your approval on your phone. Once you approve, the laptop will run it.',
+  awaitingApprovalAt:
+    'Waiting for approval: {what} on {url}. This task is waiting for your approval on your phone. Once you approve, the laptop will run it.',
+  actClickText: 'Click the text "{text}"',
+  actTypeText: 'Type "{text}"',
+  actSubmit: 'Submit the form',
+  actNavigate: 'Open {url}',
+  actScroll: 'Scroll the page',
+  actBack: 'Go back to the previous page',
+  actHome: 'Go to the home page',
+  approvalCardTitle: 'Waiting for approval on your phone',
+  approvalCardHint:
+    'Open your phone to approve or reject. On your phone you can choose to remember this approval.',
+  approvalCardHintSensitive:
+    'Sensitive action — open your phone to approve or reject. This approval can never be remembered forever.',
+  approvalCardAt: 'on {url}',
 };
 
 const STRINGS: Record<Lang, Record<StringKey, string>> = { id: ID, en: EN };

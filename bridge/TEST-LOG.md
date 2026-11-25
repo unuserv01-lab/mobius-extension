@@ -125,3 +125,88 @@ Setelah `kill`, `curl /health` gagal konek — server benar-benar mati.
 - Lease 60 detik dengan timing produksi (tes di atas memakai knob 2 dtk;
   logika sweep yang sama, tapi durasi produksi belum ditunggu live).
 - TTL 10 menit penuh (belum ditunggu live 10 menit).
+
+---
+
+# v9 — Browser takeover + open+show (26 Nov 2026, ~02:40 WIB)
+
+Node v24.22.1. Token tes: `test-token-123` (palsu, hanya untuk tes).
+Root tes: `/tmp/mobius-test-root-v9` (dihapus setelah tes).
+Server dimatikan setelah pengujian; tidak ada server yang dibiarkan berjalan.
+Perubahan yang dites: bridge v0.2.0 (tidak berubah dari v8) membawa task
+`browser_*` sebagai teks JSON; eksekusi di extension
+(`Orchestrator.handleBrowserTask` + `WebSkillTools`, kontrak di
+bridge/README.md "Browser takeover tasks (v9)").
+
+## A. Regresi (server asli + curl) — 30/30 PASS
+
+Diulang penuh dari TEST-LOG v6 + v8, semua lolos:
+- v6 (12 cek): health, auth 401, exec node --version / pwd, rm/curl/metachar/
+  git-push ditolak 403, read/write + traversal 403.
+- v8 (9 cek): POST /task accepted, GET queued attempts 0, claim attempts 1,
+  claim kedua null, result done, GET done + result, unknown task 404.
+- v8 lease (9 cek, lease 2 dtk / sweep 1 dtk): claim ke-1, claim lagi null,
+  kembali queued setelah lease habis, result ke tugas requeue -> 409,
+  claim ke-2 queued attempts 2, claim ke-3 -> expired attempts 3,
+  result ke expired -> 410, tugas baru claim -> done -> result kedua 409.
+- Server A (port 8789) dan B (port 8787) dikonfirmasi mati setelah kill.
+
+## B. Transport takeover di bridge (server asli + curl) — 2/2 PASS
+
+| # | Cek | Hasil |
+| --- | --- | --- |
+| T1 | POST /task teks JSON `browser_act`, lalu GET /bridge/tasks/next | task ter-claim dengan teks JSON utuh (`browser_act` + url + actions) |
+| T2 | POST result JSON `awaiting_approval`, lalu GET /task/:id | status `done`, result JSON `awaiting_approval` kembali utuh |
+
+## C. Logika takeover extension (harness Node, BUKAN Chrome asli) — 16/16 PASS
+
+Kode TypeScript ekstensi ASLI (`Orchestrator.ts` + `WebSkillTools.ts` +
+`BridgeClient.ts`, dibundle dari `src/`) dijalankan di Node v24 dengan
+`chrome` global palsu + model tab palsu (halaman example.com, artikel,
+devpost.com: judul + teks + elemen). Yang diuji: logika keputusan
+(approval gate, permission gate, validasi, urutan langkah, bentuk result
+JSON, tab tetap terbuka). Yang TIDAK diuji di sini: DOM Chrome asli,
+content script asli, `chrome.tabs`/`chrome.scripting` asli.
+
+| # | Kasus | Hasil |
+| --- | --- | --- |
+| a | Teks biasa -> tugas chat v8 (intent `chat`, tanpa `browserTask`) | PASS |
+| a2 | JSON rusak -> chat | PASS |
+| a3 | Type `browser_*` tak dikenal -> chat, tidak dieksekusi | PASS |
+| a4 | Parse `browser_act` OK, `approved` default false | PASS |
+| b | `browser_navigate` example.com -> done, url + title cocok, tab tetap terbuka di halaman itu | PASS |
+| open+show | `browser_navigate` devpost.com -> done, url + title cocok, tab tetap terbuka | PASS |
+| c | `browser_read` artikel -> done + teks isi | PASS |
+| d | `browser_act` read-only tanpa approved -> done (3 langkah OK) | PASS |
+| e | `browser_act` mutating TANPA approved -> `awaiting_approval`, steps kosong, tab tidak berubah, tidak ada klik | PASS |
+| f | Follow-up `approved=true` -> done, klik + ketik tercatat | PASS |
+| g | `approved=true` tapi domActions OFF -> failed jujur (`domActions permission is off`), tidak ada klik | PASS |
+| h1 | `browser_navigate` URL tidak valid -> failed jujur | PASS |
+| h2 | `browser_read` tanpa url -> failed jujur (validasi, tanpa sentuh tab) | PASS |
+| i | Elemen tidak ditemukan -> failed di langkah `clickText`, langkah sesudahnya tidak jalan | PASS |
+| r1 | `parseBrowserTaskResult` untuk `awaiting_approval` | PASS |
+| r2 | `parseBrowserTaskResult` teks biasa -> null | PASS |
+
+Pemeriksaan kode "open + show" (26 Nov 02:35, dari Tuan): `browser_navigate`
+hanya menjalankan langkah `navigate` (`chrome.tabs.update`/`create` +
+tunggu load) lalu melaporkan url/title; TIDAK ada login, TIDAK ada isi
+kredensial, dan TIDAK ada `chrome.tabs.remove` di seluruh `src/` — tab
+dibiarkan terbuka di halaman itu. (Grep: `tabs.remove`/`tabs.discard` = 0
+kemunculan; `password`/`credential` hanya di SensitiveDataScanner,
+label i18n, dan field token bridge di Settings — bukan di jalur browser task.)
+
+## Yang TIDAK dites (butuh laptop + Chrome Tuan + HP Android)
+
+- Round-trip sungguhan HP -> bridge -> extension Chrome -> HP untuk SEMUA
+  kasus di atas (harness memakai tab palsu; DOM asli, content script asli,
+  dan `chrome.tabs` asli belum dieksekusi).
+- "Open + show" di Chrome asli — langkah tes untuk Tuan (lihat bawah):
+  1. Pastikan extension v9 terpasang + bridge jalan + token sama di HP.
+  2. Dari HP: "buka example.com di laptop" (atau "buka devpost.com di laptop").
+  3. Lihat laptop: tab Chrome harus terbuka di halaman yang benar
+     (URL + judul cocok dengan yang diminta).
+  4. Pastikan TIDAK ada login terjadi (tidak ada form login terisi, tidak
+     ada akun yang masuk sendiri) dan tab TETAP terbuka setelah tugas
+     selesai (tidak tertutup).
+  5. Ulangi dengan situs lain (mis. devpost.com) bila mau.
+- Lease 60 detik timing produksi dan TTL 10 menit penuh (sama seperti v8).
