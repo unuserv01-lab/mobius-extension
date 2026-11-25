@@ -7,9 +7,9 @@
 // server program that runs ON THE LAPTOP, next to Chrome:
 //   phone (Android app) --LAN--> bridge --HTTP--> extension (in Chrome)
 //   extension --HTTP--> bridge --spawn/fs--> laptop shell + files
-// The extension-side client that talks to this bridge is built by another
-// agent; this file only defines + serves the HTTP API it must call.
-// The Android client is also built by another agent.
+// The extension-side client that talks to this bridge EXISTS since v8
+// (src/core/BridgeClient.ts + polling in the side panel & service worker).
+// The Android client is built by another agent.
 //
 // SECURITY MODEL — read this before running:
 //  - Token auth: every endpoint except GET /health requires the header
@@ -40,8 +40,17 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const TASK_TTL_MS = 10 * 60 * 1000; // tasks expire after 10 minutes
+// Lease (v8): a claimed task is leased, not owned forever. If the extension
+// dies mid-task (service worker suspended, laptop asleep), the lease expires
+// and the task returns to the queue for another attempt — max MAX_ATTEMPTS,
+// then it expires for real. The two env vars are TEST-ONLY knobs (short
+// lease/sweep so the recovery path can be exercised without waiting a
+// minute); production defaults are 60 s / 30 s.
+const LEASE_MS = Number(process.env.MOBIUS_BRIDGE_LEASE_MS || 60_000);
+const MAX_ATTEMPTS = 3;
+const SWEEP_MS = Number(process.env.MOBIUS_BRIDGE_SWEEP_MS || 30_000);
 const EXEC_TIMEOUT_MS = 30_000; // 30 s, kill on timeout
 const MAX_BODY_BYTES = 1 * 1024 * 1024; // 1 MB JSON bodies
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB read/write files
@@ -268,18 +277,36 @@ function resolveInsideRoot(p) {
 // retried; cost is a few seconds of latency, documented in the README)
 // -> extension POSTs the result to /bridge/tasks/:id/result
 // -> phone polls GET /task/:id.
-// Claiming a task marks it `running`, so it is never delivered twice.
+// Claiming a task marks it `running` AND starts a 60 s lease (attempts+1).
+// If the lease expires before a result arrives (extension suspended, laptop
+// asleep, bridge unreachable), the sweep returns the task to `queued` for
+// another attempt; after MAX_ATTEMPTS (3) claims it expires instead. The
+// overall 10-minute TTL still wins over everything. A late result for a
+// requeued task is rejected with 409, so a stale worker can never overwrite
+// the outcome of the re-run.
 // ---------------------------------------------------------------------------
-const tasks = new Map(); // id -> { taskId, text, source, status, result, createdAt, expiresAt }
+const tasks = new Map(); // id -> { taskId, text, source, status, result, createdAt, expiresAt, attempts, claimedAt, leaseExpiresAt }
 function sweepTasks() {
   const now = Date.now();
   for (const [id, t] of tasks) {
-    if (t.status === 'queued' || t.status === 'running') {
-      if (now > t.expiresAt) t.status = 'expired';
+    if (t.status === 'done' || t.status === 'failed' || t.status === 'expired') continue;
+    if (now > t.expiresAt) {
+      t.status = 'expired';
+      continue;
+    }
+    if (t.status === 'running' && t.leaseExpiresAt !== null && now > t.leaseExpiresAt) {
+      if (t.attempts >= MAX_ATTEMPTS) {
+        t.status = 'expired';
+      } else {
+        // Lease expired: back to the queue for another attempt.
+        t.status = 'queued';
+        t.claimedAt = null;
+        t.leaseExpiresAt = null;
+      }
     }
   }
 }
-setInterval(sweepTasks, 30_000).unref();
+setInterval(sweepTasks, SWEEP_MS).unref();
 
 // ---------------------------------------------------------------------------
 // HTTP helpers
@@ -420,20 +447,26 @@ const server = http.createServer(async (req, res) => {
         result: null,
         createdAt: now,
         expiresAt: now + TASK_TTL_MS,
+        attempts: 0,
+        claimedAt: null,
+        leaseExpiresAt: null,
       });
       sendJson(res, 202, { accepted: true, taskId });
       return;
     }
 
     // GET /bridge/tasks/next — extension polling endpoint (short poll).
-    // Claims the oldest queued task (marks it `running`) and returns it.
-    // Returns { task: null } when the queue is empty.
+    // Claims the oldest queued task (marks it `running`, starts a 60 s lease,
+    // attempts+1) and returns it. Returns { task: null } when the queue is empty.
     if (req.method === 'GET' && pathname === '/bridge/tasks/next') {
       sweepTasks();
       for (const t of tasks.values()) {
         if (t.status === 'queued') {
           t.status = 'running';
-          sendJson(res, 200, { task: { taskId: t.taskId, text: t.text, source: t.source, createdAt: t.createdAt } });
+          t.attempts += 1;
+          t.claimedAt = Date.now();
+          t.leaseExpiresAt = t.claimedAt + LEASE_MS;
+          sendJson(res, 200, { task: { taskId: t.taskId, text: t.text, source: t.source, createdAt: t.createdAt, attempts: t.attempts } });
           return;
         }
       }
@@ -442,6 +475,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     // POST /bridge/tasks/:id/result — extension posts the outcome back.
+    // Only a `running` task accepts a result: a requeued task (lease expired)
+    // answers 409 so a stale worker cannot overwrite the re-run's outcome.
     {
       const m = pathname.match(/^\/bridge\/tasks\/([^/]+)\/result$/);
       if (req.method === 'POST' && m) {
@@ -451,10 +486,13 @@ const server = http.createServer(async (req, res) => {
         const t = tasks.get(decodeURIComponent(m[1]));
         if (!t) { sendError(res, 404, 'unknown task id'); return; }
         if (t.status === 'expired') { sendError(res, 410, 'task expired'); return; }
+        if (t.status !== 'running') { sendError(res, 409, 'task is not running (it was requeued or already finished)'); return; }
         const status = body?.status;
         if (status !== 'done' && status !== 'failed') { sendError(res, 400, 'status must be "done" or "failed"'); return; }
         t.status = status;
         t.result = body.result !== undefined ? body.result : null;
+        t.claimedAt = null;
+        t.leaseExpiresAt = null;
         sendJson(res, 200, { taskId: t.taskId, status: t.status });
         return;
       }
@@ -467,7 +505,7 @@ const server = http.createServer(async (req, res) => {
         sweepTasks();
         const t = tasks.get(decodeURIComponent(m[1]));
         if (!t) { sendError(res, 404, 'unknown task id'); return; }
-        const out = { taskId: t.taskId, status: t.status };
+        const out = { taskId: t.taskId, status: t.status, attempts: t.attempts };
         if (t.result !== null && t.result !== undefined) out.result = t.result;
         sendJson(res, 200, out);
         return;
@@ -486,4 +524,5 @@ server.listen(port, HOST, () => {
   console.log('[mobius-bridge] root: ' + ROOT);
   console.log('[mobius-bridge] mode: ' + (lan ? 'LAN (0.0.0.0 — same Wi-Fi only, NEVER port-forward)' : 'localhost only (127.0.0.1)'));
   console.log('[mobius-bridge] auth: X-Mobius-Token required on all endpoints except GET /health');
+  console.log('[mobius-bridge] tasks: 10-min TTL, 60 s lease, max 3 attempts (requeue on lease expiry)');
 });

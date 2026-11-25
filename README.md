@@ -35,9 +35,8 @@ A Chrome Extension (Manifest V3) for the **Firebase #BuildHybridAI 2026** hackat
 2. Project settings → "Your apps" → Web app → copy the `firebaseConfig` values into `src/config/firebase.ts`:
    - `apiKey`, `authDomain`, `projectId`, `storageBucket`, `messagingSenderId`, `appId`
 3. **Build → AI Logic** → enable the Gemini API (Vertex AI or Gemini Developer API backend).
-4. **Build → App Check** → register the web app and enable the **debug provider** for hackathon judging:
-   - Paste the debug token into `APP_CHECK_DEBUG_TOKEN` in `src/config/firebase.ts`, or set it in the console: `self.FIREBASE_APPCHECK_DEBUG_TOKEN = '<token>'`.
-   - (Production) paste a ReCaptcha Enterprise site key into `RECAPTCHA_ENTERPRISE_SITE_KEY`.
+4. **Build → App Check** → register the web app. **Honest note (v8): a debug token ALONE does NOT turn App Check on** — the Firebase JS SDK has no public DebugProvider for web; the debug-token global is only honored when App Check is initialized with a real provider. Pasting a token without a reCAPTCHA site key leaves App Check OFF (the extension logs a clear warning). That is fine while App Check enforcement is OFF in the Firebase console (monitoring only) — cloud AI works without App Check.
+   - (To actually enable App Check) paste a ReCaptcha Enterprise site key into `RECAPTCHA_ENTERPRISE_SITE_KEY`.
 5. **Until real keys are pasted**, MOBIUS still runs: it uses Chrome's built-in Prompt API when available, then a local extractive fallback — and every limitation is shown to the user instead of failing silently.
 
 ### 3. Build & load unpacked
@@ -65,7 +64,28 @@ SubAgent --reports--> Core --decides--> MemoryStore (local, TTL)
 
 - **On-device**: `getAI(app, { backend: new GoogleAIBackend() })` + `getGenerativeModel(ai, { model: 'gemini-nano', inferenceMode: 'on-device' })` — called at runtime in `src/ai/OnDeviceAI.ts` (with a Chrome Prompt API fallback).
 - **Cloud**: the same SDK, `getGenerativeModel(ai, { model: 'gemini-2.0-flash' })` — called at runtime in `src/ai/CloudAI.ts`, gated by the "Allow Cloud AI" toggle and logged in `src/ai/AIRouter.ts`.
-- **App Check** is initialized in `src/config/firebase.ts` with debug-token support for judging.
+- **App Check** is initialized in `src/config/firebase.ts` ONLY when a ReCaptcha Enterprise site key is set. A debug token alone does NOT activate it (no public DebugProvider for web in the Firebase JS SDK) — the extension logs a clear warning in that case. Enforcement is currently OFF in the console (monitoring only), so cloud AI works without App Check.
+
+## Laptop bridge — remote tasks from the Android phone (v8)
+
+The phone is the remote control, the laptop is the worker. See `bridge/README.md` for the full API.
+
+```
+HP Android --(Wi-Fi/LAN)--> bridge (port 8787) --(HTTP localhost)--> extension Chrome
+```
+
+1. On the laptop: `MOBIUS_BRIDGE_TOKEN=<token-acak> node bridge/bridge.mjs --lan`
+2. In the extension Settings → **Laptop Bridge**: paste the same bridge URL (`http://localhost:8787`, or the laptop's LAN IP when the phone must reach it) and the same token.
+3. From the phone, send a task (e.g. "cari harga sepatu di Shopee") — the extension claims it, runs it through the Orchestrator (skills first, then routing), and posts the result back.
+
+**Honest polling design (v8):** the side panel polls every **3 s** while open (a live page can do that reliably). When the panel is closed, the service worker polls via `chrome.alarms` — Chrome enforces a **1-minute minimum** — so latency is up to ~60 s + execution time. The worker can also be suspended mid-task; the bridge lease (60 s, 3 attempts) requeues the task in that case. No long-poll: an MV3 service worker cannot reliably hold one. Remote tasks work best for skills + chat; page-dependent intents (summarize / reply) need an active tab and fail honestly without one.
+
+## Device test checklist (NOT verified in this VM — needs Tuan's laptop + phone)
+
+- [ ] **Nano (on-device):** Chrome 138+, Prompt API enabled, RAM ≥ 16 GB, VRAM > 4 GB, ≥ 22 GB free disk; Nano languages are EN/JA/ES/DE/FR — Indonesian is NOT fully supported. Check the Router Log: engine must read `on-device`, not a silent cloud fallback.
+- [ ] **Round-trip:** bridge running with `--lan` → phone sends a task → result appears on the phone (panel open: ~3 s + execution; panel closed: up to ~60 s + execution).
+- [ ] **Lease recovery:** kill the bridge mid-task / close the laptop lid — the task must return to `queued` and be delivered again (max 3 attempts), never silently lost.
+- [ ] **App Check:** with no reCAPTCHA key set, the console must show the clear "App Check NOT initialized" warning (not a silent pass).
 
 ## Demo video shot list (≤ 3 minutes)
 

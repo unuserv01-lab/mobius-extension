@@ -11,6 +11,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   const DEFAULT_LOCAL_SERVER_BASE_URL = "http://localhost:11434";
   const DEFAULT_LOCAL_SERVER_MODEL = "llama3.1";
   const DEFAULT_LOCAL_SERVER_TIMEOUT_MS = 6e4;
+  const DEFAULT_BRIDGE_URL = "http://localhost:8787";
+  const BRIDGE_ALARM_MINUTES = 1;
   const DEFAULT_CHAT_RETENTION_SECONDS = 24 * 60 * 60;
   const STORAGE_KEYS = {
     permissions: "mobius_permissions",
@@ -19,6 +21,43 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     settings: "mobius_settings",
     chatHistory: "mobius_chat_history"
   };
+  async function getBridgeSettings() {
+    const data = await chrome.storage.local.get(STORAGE_KEYS.settings);
+    const stored = data[STORAGE_KEYS.settings];
+    return {
+      url: ((stored == null ? void 0 : stored.bridgeUrl) ?? DEFAULT_BRIDGE_URL).replace(/\/+$/, ""),
+      token: (stored == null ? void 0 : stored.bridgeToken) ?? ""
+    };
+  }
+  function headers(token) {
+    return { "Content-Type": "application/json", "X-Mobius-Token": token };
+  }
+  async function pollNextTask() {
+    const { url, token } = await getBridgeSettings();
+    if (!token) return null;
+    let res;
+    try {
+      res = await fetch(`${url}/bridge/tasks/next`, { method: "GET", headers: headers(token) });
+    } catch (e) {
+      throw new Error(`bridge unreachable at ${url}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (!res.ok) throw new Error(`bridge poll failed: HTTP ${res.status}`);
+    const body = await res.json();
+    return body.task ?? null;
+  }
+  async function postTaskResult(taskId, status, result) {
+    const { url, token } = await getBridgeSettings();
+    if (!token) throw new Error("bridge token not configured");
+    const res = await fetch(`${url}/bridge/tasks/${encodeURIComponent(taskId)}/result`, {
+      method: "POST",
+      headers: headers(token),
+      body: JSON.stringify({ status, result })
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`bridge result post failed: HTTP ${res.status} ${text.slice(0, 200)}`);
+    }
+  }
   class PromptBuilder {
     static whatsappReply(lastMessage, sender, userInstruction) {
       const instruction = userInstruction.trim() ? `User instruction for tone/style: "${userInstruction}".` : "Match the sender's tone; keep it short, natural, and friendly.";
@@ -3219,17 +3258,17 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     return loggingTags.join(" ");
   }
   async function getHeaders(url) {
-    const headers = new Headers();
-    headers.append("Content-Type", "application/json");
-    headers.append("x-goog-api-client", getClientHeaders(url));
-    headers.append("x-goog-api-key", url.params.apiSettings.apiKey);
+    const headers2 = new Headers();
+    headers2.append("Content-Type", "application/json");
+    headers2.append("x-goog-api-client", getClientHeaders(url));
+    headers2.append("x-goog-api-key", url.params.apiSettings.apiKey);
     if (url.params.apiSettings.automaticDataCollectionEnabled) {
-      headers.append("X-Firebase-Appid", url.params.apiSettings.appId);
+      headers2.append("X-Firebase-Appid", url.params.apiSettings.appId);
     }
     if (url.params.apiSettings.getAppCheckToken) {
       const appCheckToken = await url.params.apiSettings.getAppCheckToken();
       if (appCheckToken) {
-        headers.append("X-Firebase-AppCheck", appCheckToken.token);
+        headers2.append("X-Firebase-AppCheck", appCheckToken.token);
         if (appCheckToken.error) {
           logger$1.warn(`Unable to obtain a valid App Check token: ${appCheckToken.error.message}`);
         }
@@ -3238,10 +3277,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     if (url.params.apiSettings.getAuthToken) {
       const authToken = await url.params.apiSettings.getAuthToken();
       if (authToken) {
-        headers.append("Authorization", `Firebase ${authToken.accessToken}`);
+        headers2.append("Authorization", `Firebase ${authToken.accessToken}`);
       }
     }
-    return headers;
+    return headers2;
   }
   async function makeRequest(requestUrlParams, body) {
     var _a, _b;
@@ -4984,7 +5023,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
    * limitations under the License.
    */
   async function exchangeToken({ url, body }, heartbeatServiceProvider) {
-    const headers = {
+    const headers2 = {
       "Content-Type": "application/json"
     };
     const heartbeatService = heartbeatServiceProvider.getImmediate({
@@ -4993,13 +5032,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     if (heartbeatService) {
       const heartbeatsHeader = await heartbeatService.getHeartbeatsHeader();
       if (heartbeatsHeader) {
-        headers["X-Firebase-Client"] = heartbeatsHeader;
+        headers2["X-Firebase-Client"] = heartbeatsHeader;
       }
     }
     const options = {
       method: "POST",
       body: JSON.stringify(body),
-      headers
+      headers: headers2
     };
     let response;
     try {
@@ -5892,15 +5931,25 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
     if (appCheckReady) return;
     try {
       const g = globalThis;
-      if (APP_CHECK_DEBUG_TOKEN !== "PASTE_YOUR_APP_CHECK_DEBUG_TOKEN_HERE") {
+      const hasDebugToken = APP_CHECK_DEBUG_TOKEN !== "PASTE_YOUR_APP_CHECK_DEBUG_TOKEN_HERE";
+      const hasRecaptchaKey = RECAPTCHA_ENTERPRISE_SITE_KEY !== "PASTE_YOUR_RECAPTCHA_ENTERPRISE_SITE_KEY_HERE";
+      if (hasDebugToken) {
         g.FIREBASE_APPCHECK_DEBUG_TOKEN = APP_CHECK_DEBUG_TOKEN;
       }
-      if (RECAPTCHA_ENTERPRISE_SITE_KEY !== "PASTE_YOUR_RECAPTCHA_ENTERPRISE_SITE_KEY_HERE") {
+      if (hasRecaptchaKey) {
         initializeAppCheck(firebaseApp, {
           provider: new ReCaptchaEnterpriseProvider(RECAPTCHA_ENTERPRISE_SITE_KEY),
           isTokenAutoRefreshEnabled: true
         });
         appCheckReady = true;
+      } else if (hasDebugToken) {
+        console.warn(
+          "[MOBIUS] App Check NOT initialized: a debug token is set, but there is no reCAPTCHA Enterprise site key, and the Firebase JS SDK has no public DebugProvider for web — a debug token alone cannot turn App Check on. Cloud AI calls will run WITHOUT App Check. That is fine while App Check enforcement is OFF in the Firebase console (monitoring only). To actually enable App Check, set RECAPTCHA_ENTERPRISE_SITE_KEY."
+        );
+      } else {
+        console.info(
+          "[MOBIUS] App Check is OFF (no debug token, no reCAPTCHA site key). Cloud AI calls run without it; fine while App Check enforcement is OFF in the Firebase console."
+        );
       }
     } catch (err) {
       console.warn("[MOBIUS] App Check init failed (continuing without it):", err);
@@ -6295,6 +6344,13 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
     skillFailed: "Skill gagal: {message}",
     skillNoQuery: 'Sebutkan produknya — mis. "cari harga sepatu di Shopee".',
     skillNeedsReadPage: "Skill ini membaca halaman, jadi butuh izin baca halaman.",
+    skillNeedsDomActions: "Skill ini mengubah halaman (klik / ketik / kirim), jadi butuh izin aksi DOM.",
+    setBridge: "Laptop Bridge (tugas jarak jauh)",
+    setBridgeDesc: "Terima tugas dari HP Android lewat bridge di laptop. Bridge harus jalan di laptop ini (bridge/bridge.mjs) dan token di bawah harus sama dengan MOBIUS_BRIDGE_TOKEN di laptop + di HP.",
+    setBridgeUrl: "URL bridge",
+    setBridgeToken: "Token bridge",
+    setBridgeNote: "Token tidak pernah dicatat di log dan hanya dikirim ke URL bridge di atas sebagai header X-Mobius-Token. Bila panel samping terbuka, tugas diambil tiap 3 detik; bila tertutup, tiap 1 menit (batas alarm Chrome). Kosongkan token untuk mematikan bridge.",
+    setSaveBridge: "Simpan pengaturan bridge",
     typeKtp: "nomor KTP",
     typePhone: "nomor HP",
     typeAccount: "nomor rekening",
@@ -6395,6 +6451,13 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
     skillFailed: "Skill failed: {message}",
     skillNoQuery: 'Name the product — e.g. "cari harga sepatu di Shopee".',
     skillNeedsReadPage: "This skill reads the page, so it needs the read-page permission.",
+    skillNeedsDomActions: "This skill changes the page (click / type / submit), so it needs the DOM-actions permission.",
+    setBridge: "Laptop Bridge (remote tasks)",
+    setBridgeDesc: "Receive tasks from the Android phone via the bridge on this laptop. The bridge must run on this laptop (bridge/bridge.mjs) and the token below must match MOBIUS_BRIDGE_TOKEN on the laptop + the phone.",
+    setBridgeUrl: "Bridge URL",
+    setBridgeToken: "Bridge token",
+    setBridgeNote: "The token is never logged and is only sent to the bridge URL above as the X-Mobius-Token header. While the side panel is open, tasks are picked up every 3 seconds; while closed, every 1 minute (Chrome alarm limit). Clear the token to turn the bridge off.",
+    setSaveBridge: "Save bridge settings",
     typeKtp: "ID card number",
     typePhone: "phone number",
     typeAccount: "bank account number",
@@ -6876,6 +6939,7 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       return { intent: "chat", agentType: "chat", confidence: 0.6 };
     }
   }
+  const DOM_MUTATING_TOOLS = /* @__PURE__ */ new Set(["clickText", "typeText", "submit"]);
   class WebSkillTools {
     constructor() {
       __publicField(this, "tabId", null);
@@ -7057,6 +7121,9 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       if (!await this.permissions.isAllowed("readPage")) {
         return this.fail(task, "none", `${t("skillNeedsReadPage")} ${this.permissions.denialMessage("readPage")}`);
       }
+      if (skill.steps.some((s) => DOM_MUTATING_TOOLS.has(s.tool)) && !await this.permissions.isAllowed("domActions")) {
+        return this.fail(task, "none", `${t("skillNeedsDomActions")} ${this.permissions.denialMessage("domActions")}`);
+      }
       const outcome = await new SkillRunner().run(skill, params2, new WebSkillTools());
       const cloudAllowed = await this.permissions.isAllowed("cloudAI");
       await this.aiRouter.log({
@@ -7150,6 +7217,7 @@ ${lines.map((p) => `• ${p}`).join("\n")}`;
     }
   }
   const orchestrator = new Orchestrator();
+  let bridgeBusy = false;
   void loadLanguage();
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     var _a, _b, _c;
@@ -7170,7 +7238,12 @@ ${lines.map((p) => `• ${p}`).join("\n")}`;
     chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => void 0);
   });
   chrome.alarms.create("mobius-ttl-cleanup", { periodInMinutes: TEMP_CLEANUP_ALARM_MINUTES });
+  chrome.alarms.create("mobius-bridge-poll", { periodInMinutes: BRIDGE_ALARM_MINUTES });
   chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === "mobius-bridge-poll") {
+      void pollBridgeFromWorker();
+      return;
+    }
     if (alarm.name !== "mobius-ttl-cleanup") return;
     orchestrator.getMemoryStore().purgeExpired().then((purged) => {
       if (purged > 0) console.log(`[MOBIUS] TTL cleanup purged ${purged} expired memory entries.`);
@@ -7180,4 +7253,28 @@ ${lines.map((p) => `• ${p}`).join("\n")}`;
     }).catch((err) => console.warn("[MOBIUS] Chat cleanup failed:", err));
   });
   console.log("[MOBIUS] Core service worker started.");
+  async function pollBridgeFromWorker() {
+    if (bridgeBusy) return;
+    let task;
+    try {
+      task = await pollNextTask();
+    } catch (e) {
+      console.warn("[MOBIUS] Bridge poll failed:", e instanceof Error ? e.message : String(e));
+      return;
+    }
+    if (!task) return;
+    bridgeBusy = true;
+    try {
+      const mobiusTask = { id: task.taskId, intent: "chat", input: task.text };
+      const result = await orchestrator.handleTask(mobiusTask);
+      await postTaskResult(task.taskId, result.ok ? "done" : "failed", result.ok ? result.text : result.error ?? "task failed");
+    } catch (e) {
+      try {
+        await postTaskResult(task.taskId, "failed", e instanceof Error ? e.message : String(e));
+      } catch {
+      }
+    } finally {
+      bridgeBusy = false;
+    }
+  }
 })();

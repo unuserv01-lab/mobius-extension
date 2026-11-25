@@ -2,6 +2,7 @@
 // chat retention. (v7: language picker id/en + chat retention 1h/24h/7d.)
 import {
   CHAT_RETENTION_CHOICES,
+  DEFAULT_BRIDGE_URL,
   DEFAULT_CHAT_RETENTION_SECONDS,
   DEFAULT_ENGINE,
   DEFAULT_LOCAL_SERVER_BASE_URL,
@@ -36,6 +37,8 @@ export class SettingsView {
       localServerModel: stored?.localServerModel ?? DEFAULT_LOCAL_SERVER_MODEL,
       language: stored?.language ?? getLang(),
       chatRetentionSeconds: stored?.chatRetentionSeconds ?? DEFAULT_CHAT_RETENTION_SECONDS,
+      bridgeUrl: stored?.bridgeUrl ?? DEFAULT_BRIDGE_URL,
+      bridgeToken: stored?.bridgeToken ?? '',
     };
     const engine = settings.engine ?? DEFAULT_ENGINE;
     const lang = settings.language ?? getLang();
@@ -101,6 +104,18 @@ export class SettingsView {
           <span class="muted" id="engine-saved"></span>
         </div>
         <div class="card">
+          <strong>${this.escape(t('setBridge'))}</strong>
+          <p class="muted">${this.escape(t('setBridgeDesc'))}</p>
+          <label class="muted">${this.escape(t('setBridgeUrl'))}</label>
+          <input type="text" id="bridge-url" value="${this.escape(settings.bridgeUrl ?? '')}" placeholder="http://localhost:8787" />
+          <br /><br />
+          <label class="muted">${this.escape(t('setBridgeToken'))}</label>
+          <input type="password" id="bridge-token" value="${this.escape(settings.bridgeToken ?? '')}" autocomplete="off" />
+          <p class="muted">${this.escape(t('setBridgeNote'))}</p>
+          <button class="btn primary" id="save-bridge">${this.escape(t('setSaveBridge'))}</button>
+          <span class="muted" id="bridge-saved"></span>
+        </div>
+        <div class="card">
           <strong>${this.escape(t('setTtl'))}</strong>
           <p class="muted">${this.escape(t('setTtlDesc'))}</p>
           <label class="muted">${this.escape(t('setMemoryTtl'))}</label>
@@ -148,6 +163,15 @@ export class SettingsView {
       const model = (this.el.querySelector('#local-model') as HTMLInputElement).value.trim() || DEFAULT_LOCAL_SERVER_MODEL;
       void this.saveSettings({ engine: engineChoice, localServerBaseUrl: baseUrl, localServerModel: model }).then(() => {
         const saved = this.el.querySelector('#engine-saved');
+        if (saved) saved.textContent = t('setSaved');
+      });
+    });
+
+    this.el.querySelector('#save-bridge')?.addEventListener('click', () => {
+      const url = (this.el.querySelector('#bridge-url') as HTMLInputElement).value.trim() || DEFAULT_BRIDGE_URL;
+      const token = (this.el.querySelector('#bridge-token') as HTMLInputElement).value.trim();
+      void this.saveSettings({ bridgeUrl: url, bridgeToken: token }).then(() => {
+        const saved = this.el.querySelector('#bridge-saved');
         if (saved) saved.textContent = t('setSaved');
       });
     });

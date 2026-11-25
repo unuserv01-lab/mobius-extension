@@ -20,7 +20,14 @@ export const DEFAULT_LOCAL_SERVER_BASE_URL = 'http://localhost:11434';
 export const DEFAULT_LOCAL_SERVER_MODEL = 'llama3.1'; // assumption: pull it first (`ollama pull llama3.1`)
 export const DEFAULT_LOCAL_SERVER_TIMEOUT_MS = 60_000; // 60 s
 
-// Chat-history retention (seconds) — same choices as Android Settings TTL.
+// Laptop bridge (remote tasks from the Android phone, v8).
+// The bridge server runs on the laptop (bridge/bridge.mjs, port 8787).
+export const DEFAULT_BRIDGE_URL = 'http://localhost:8787';
+// Side-panel fast poll: the panel is a live page, so a 3 s setInterval is
+// reliable while it is open. The service worker CANNOT poll this fast —
+// chrome.alarms enforces a 1-minute minimum (see BRIDGE_ALARM_MINUTES).
+export const BRIDGE_POLL_INTERVAL_MS = 3000;
+export const BRIDGE_ALARM_MINUTES = 1; // chrome.alarms minimum; worker fallback cadence
 export const DEFAULT_CHAT_RETENTION_SECONDS = 24 * 60 * 60; // 24 hours
 export const CHAT_RETENTION_CHOICES = [
   { labelKey: 'retention1h', seconds: 60 * 60 },

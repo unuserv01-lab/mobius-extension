@@ -104,6 +104,13 @@ export type StringKey =
   | 'skillFailed'
   | 'skillNoQuery'
   | 'skillNeedsReadPage'
+  | 'skillNeedsDomActions'
+  | 'setBridge'
+  | 'setBridgeDesc'
+  | 'setBridgeUrl'
+  | 'setBridgeToken'
+  | 'setBridgeNote'
+  | 'setSaveBridge'
   | 'typeKtp'
   | 'typePhone'
   | 'typeAccount'
@@ -214,6 +221,15 @@ const ID: Record<StringKey, string> = {
   skillFailed: 'Skill gagal: {message}',
   skillNoQuery: 'Sebutkan produknya — mis. "cari harga sepatu di Shopee".',
   skillNeedsReadPage: 'Skill ini membaca halaman, jadi butuh izin baca halaman.',
+  skillNeedsDomActions: 'Skill ini mengubah halaman (klik / ketik / kirim), jadi butuh izin aksi DOM.',
+  setBridge: 'Laptop Bridge (tugas jarak jauh)',
+  setBridgeDesc:
+    'Terima tugas dari HP Android lewat bridge di laptop. Bridge harus jalan di laptop ini (bridge/bridge.mjs) dan token di bawah harus sama dengan MOBIUS_BRIDGE_TOKEN di laptop + di HP.',
+  setBridgeUrl: 'URL bridge',
+  setBridgeToken: 'Token bridge',
+  setBridgeNote:
+    'Token tidak pernah dicatat di log dan hanya dikirim ke URL bridge di atas sebagai header X-Mobius-Token. Bila panel samping terbuka, tugas diambil tiap 3 detik; bila tertutup, tiap 1 menit (batas alarm Chrome). Kosongkan token untuk mematikan bridge.',
+  setSaveBridge: 'Simpan pengaturan bridge',
   typeKtp: 'nomor KTP',
   typePhone: 'nomor HP',
   typeAccount: 'nomor rekening',
@@ -325,6 +341,15 @@ const EN: Record<StringKey, string> = {
   skillFailed: 'Skill failed: {message}',
   skillNoQuery: 'Name the product — e.g. "cari harga sepatu di Shopee".',
   skillNeedsReadPage: 'This skill reads the page, so it needs the read-page permission.',
+  skillNeedsDomActions: 'This skill changes the page (click / type / submit), so it needs the DOM-actions permission.',
+  setBridge: 'Laptop Bridge (remote tasks)',
+  setBridgeDesc:
+    'Receive tasks from the Android phone via the bridge on this laptop. The bridge must run on this laptop (bridge/bridge.mjs) and the token below must match MOBIUS_BRIDGE_TOKEN on the laptop + the phone.',
+  setBridgeUrl: 'Bridge URL',
+  setBridgeToken: 'Bridge token',
+  setBridgeNote:
+    'The token is never logged and is only sent to the bridge URL above as the X-Mobius-Token header. While the side panel is open, tasks are picked up every 3 seconds; while closed, every 1 minute (Chrome alarm limit). Clear the token to turn the bridge off.',
+  setSaveBridge: 'Save bridge settings',
   typeKtp: 'ID card number',
   typePhone: 'phone number',
   typeAccount: 'bank account number',

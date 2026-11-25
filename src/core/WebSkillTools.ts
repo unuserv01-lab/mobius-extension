@@ -2,9 +2,20 @@
 // The runner runs in the service worker and cannot touch the DOM: every DOM
 // action is forwarded to the active tab's content script (src/content/index.ts,
 // MOBIUS_TOOL_* messages). Navigation runs here via chrome.tabs.
-// All tools are READ-ONLY by construction: navigate, read, extract, scroll.
-// Nothing here types into a checkout, clicks "buy", or sends anything.
+//
+// NOT read-only (the old header claimed so — that was wrong): clickText,
+// typeText and submit DO change page state, and are gated by the Orchestrator
+// (runSkill checks the domActions permission BEFORE any step runs — see
+// DOM_MUTATING_TOOLS below). A skill whose steps include any of them is
+// refused whole when domActions is off, never run halfway.
+// Navigation (navigate / back / home) is deliberately NOT gated: it only
+// changes which page is shown, never modifies page content or submits
+// anything, the URL comes from the skill JSON itself (author-controlled,
+// deterministic), and the user sees it happen and can go back.
 import { failResult, okResult, type SkillToolAdapter, type ToolResult } from './SkillRunner';
+
+/** Steps that mutate page state and therefore require the domActions permission. */
+export const DOM_MUTATING_TOOLS: ReadonlySet<string> = new Set(['clickText', 'typeText', 'submit']);
 
 type ContentResult = { ok: boolean; text?: string; matches?: string[]; found?: boolean; error?: string };
 

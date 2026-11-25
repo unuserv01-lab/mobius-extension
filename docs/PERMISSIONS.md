@@ -31,8 +31,10 @@ All gates live in `PermissionManager` (`src/core/PermissionManager.ts`) and are 
 
 ## Firebase App Check
 
-Firebase AI Logic requires App Check. For hackathon judging, debug tokens are accepted:
+Firebase AI Logic can use App Check, but **a debug token alone does NOT turn it on** (v8 correction — the earlier text claimed it did). The Firebase JS SDK has no public DebugProvider for web; the `FIREBASE_APPCHECK_DEBUG_TOKEN` global is only honored when App Check is initialized with a real provider. To actually enable App Check:
 
-1. Firebase console → Build → App Check → register the web app → **Manage debug tokens** → create one.
-2. Paste it as `APP_CHECK_DEBUG_TOKEN` in `src/config/firebase.ts`, or set `self.FIREBASE_APPCHECK_DEBUG_TOKEN = '<token>'` in the browser console before loading the extension.
-3. For production, paste a ReCaptcha Enterprise site key as `RECAPTCHA_ENTERPRISE_SITE_KEY` instead.
+1. Firebase console → Build → App Check → register the web app.
+2. Paste a ReCaptcha Enterprise site key as `RECAPTCHA_ENTERPRISE_SITE_KEY` in `src/config/firebase.ts`.
+3. (Optional) also paste a debug token as `APP_CHECK_DEBUG_TOKEN` — it only takes effect together with the provider above.
+
+Current state: App Check enforcement is **OFF** in the Firebase console (monitoring only), so cloud AI works without App Check. If a debug token is set without a site key, the extension logs a clear warning that App Check is NOT initialized.

@@ -2,10 +2,12 @@
 // No LLM calls, no branching beyond the skill's own `when` conditions.
 // Resolves $params/$vars (missing ref fails the step loudly), honors onFail
 // (fail | skip | stop) and maxRetries, enforces maxSteps + wall-clock timeoutMs.
-// GATE NOTE: the extension has no ActionGate / approval UI in the service
-// worker. All web skill tools are read-only by construction (navigate, read,
-// extract — nothing writes, nothing sends). A step marked risk="irreversible"
-// therefore FAILS CLOSED instead of running blind.
+// GATE NOTE: the runner itself does not gate permissions — the Orchestrator
+// does, in runSkill(), BEFORE the run starts: a skill whose steps include a
+// DOM-mutating tool (clickText / typeText / submit — see DOM_MUTATING_TOOLS
+// in WebSkillTools) is refused whole when the domActions permission is off.
+// A step marked risk="irreversible" therefore FAILS CLOSED instead of
+// running blind (no approval UI exists in the service worker).
 import type { Skill, SkillOutcome, StepResult } from './Skill';
 
 export interface ToolResult {

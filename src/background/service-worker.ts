@@ -1,11 +1,19 @@
 // Service worker — Core runtime (P1). Owns the Orchestrator, the TTL
 // cleanup alarm (every 5 minutes), and the extension action (opens Side Panel).
-import { TEMP_CLEANUP_ALARM_MINUTES } from '../config/constants';
+// v8: also owns the bridge slow-poll alarm (every 1 minute, the chrome.alarms
+// minimum) as a fallback for remote tasks while the side panel is closed —
+// the panel itself polls every 3 s while open (see src/ui/main.ts).
+import { BRIDGE_ALARM_MINUTES, TEMP_CLEANUP_ALARM_MINUTES } from '../config/constants';
+import { pollNextTask, postTaskResult, type BridgeTask } from '../core/BridgeClient';
 import { Orchestrator } from '../core/Orchestrator';
 import { loadLanguage } from '../core/i18n';
 import type { MobiusTask, TaskResult } from '../core/types';
 
 const orchestrator = new Orchestrator();
+
+// One remote task at a time per client: the bridge delivers each task once,
+// and a second claim while one is running would only add queue pressure.
+let bridgeBusy = false;
 
 // Load the persisted UI language once at startup (default 'id').
 void loadLanguage();
@@ -37,7 +45,16 @@ chrome.action.onClicked.addListener((tab) => {
 // TTL cleanup (P6 / memory model): purge expired memory + chat history;
 // router log is capped on write.
 chrome.alarms.create('mobius-ttl-cleanup', { periodInMinutes: TEMP_CLEANUP_ALARM_MINUTES });
+// Bridge slow poll (v8): chrome.alarms enforces a 1-minute minimum, so this
+// is only a fallback — the side panel polls every 3 s while open. Latency
+// while the panel is closed: up to ~60 s + execution time. If this worker is
+// suspended mid-task, the bridge lease (60 s, 3 attempts) requeues the task.
+chrome.alarms.create('mobius-bridge-poll', { periodInMinutes: BRIDGE_ALARM_MINUTES });
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'mobius-bridge-poll') {
+    void pollBridgeFromWorker();
+    return;
+  }
   if (alarm.name !== 'mobius-ttl-cleanup') return;
   orchestrator
     .getMemoryStore()
@@ -56,3 +73,40 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 console.log('[MOBIUS] Core service worker started.');
+
+/**
+ * Bridge slow poll (worker side). Claims one task, runs it through the
+ * Orchestrator (skill match first, then routing — same as a local task),
+ * and posts the outcome back. A task with no tab context (remote tasks have
+ * none) runs fine for skills + chat; page-dependent intents (summarize /
+ * wa-reply) fail honestly when there is no active tab to read.
+ */
+async function pollBridgeFromWorker(): Promise<void> {
+  if (bridgeBusy) return;
+  let task: BridgeTask | null;
+  try {
+    task = await pollNextTask();
+  } catch (e) {
+    // Bridge down / unreachable is normal when it is not running — one line,
+    // no token, no stack. (The panel path throttles the same warning.)
+    console.warn('[MOBIUS] Bridge poll failed:', e instanceof Error ? e.message : String(e));
+    return;
+  }
+  if (!task) return;
+  bridgeBusy = true;
+  try {
+    const mobiusTask: MobiusTask = { id: task.taskId, intent: 'chat', input: task.text };
+    const result = await orchestrator.handleTask(mobiusTask);
+    await postTaskResult(task.taskId, result.ok ? 'done' : 'failed', result.ok ? result.text : result.error ?? 'task failed');
+  } catch (e) {
+    // Worker error (e.g. suspended mid-task): report failure if we still can;
+    // if the bridge is gone too, its lease requeues the task anyway.
+    try {
+      await postTaskResult(task.taskId, 'failed', e instanceof Error ? e.message : String(e));
+    } catch {
+      // Nothing more we can do — the lease is the safety net.
+    }
+  } finally {
+    bridgeBusy = false;
+  }
+}

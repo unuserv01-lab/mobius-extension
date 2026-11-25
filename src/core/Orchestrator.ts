@@ -11,7 +11,7 @@ import { MemoryStore } from './MemoryStore';
 import { PermissionManager } from './PermissionManager';
 import { SkillRunner } from './SkillRunner';
 import { TaskRouter } from './TaskRouter';
-import { WebSkillTools } from './WebSkillTools';
+import { DOM_MUTATING_TOOLS, WebSkillTools } from './WebSkillTools';
 import type { Skill } from './Skill';
 import type { MobiusSettings, MobiusTask, TaskResult } from './types';
 
@@ -71,6 +71,15 @@ export class Orchestrator {
     const summary = task.input.slice(0, 80).replace(/\s+/g, ' ');
     if (!(await this.permissions.isAllowed('readPage'))) {
       return this.fail(task, 'none', `${t('skillNeedsReadPage')} ${this.permissions.denialMessage('readPage')}`);
+    }
+    // v8 (audit ChatGPT): a skill that clicks, types or submits mutates the
+    // page — it needs domActions. Checked BEFORE any step runs, so a denied
+    // skill is refused whole, never run halfway. Navigation (navigate / back /
+    // home) is not gated: it only changes which page is shown, never modifies
+    // page content or submits anything (see DOM_MUTATING_TOOLS). The shipped
+    // shopee/tokopedia skills use no mutating tool, so they are unaffected.
+    if (skill.steps.some((s) => DOM_MUTATING_TOOLS.has(s.tool)) && !(await this.permissions.isAllowed('domActions'))) {
+      return this.fail(task, 'none', `${t('skillNeedsDomActions')} ${this.permissions.denialMessage('domActions')}`);
     }
     const outcome = await new SkillRunner().run(skill, params, new WebSkillTools());
     const cloudAllowed = await this.permissions.isAllowed('cloudAI');

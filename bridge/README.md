@@ -11,9 +11,9 @@ HP Android --(Wi-Fi/LAN)--> bridge --(HTTP localhost)--> extension Chrome
 extension Chrome ----------(HTTP localhost)------------> bridge --(spawn/fs)--> shell + file laptop
 ```
 
-Bridge ini **hanya server**. Client extension yang memanggilnya dan client
-Android dibangun oleh agen lain — file ini mendefinisikan API yang harus
-mereka panggil.
+Bridge ini **hanya server**. Client Android dibangun oleh agen lain; **client
+extension SUDAH ADA sejak v8** (`src/core/BridgeClient.ts` + polling di side
+panel & service worker) — file ini mendefinisikan API yang mereka panggil.
 
 ## Menjalankan (di laptop Tuan)
 
@@ -127,20 +127,40 @@ Response langsung (tidak menunggu eksekusi): `202 { "accepted": true, "taskId": 
 ### `GET /bridge/tasks/next` — extension mengambil tugas (polling)
 
 Endpoint yang di-poll extension. Mengembalikan tugas `queued` tertua dan
-menandainya `running` (jadi tidak pernah dikirim dua kali):
+menandainya `running` — sekaligus **memulai lease 60 detik** dan menaikkan
+`attempts` (jadi tidak pernah dikirim dua kali dalam satu lease):
 
 ```json
-{ "task": { "taskId": "...", "text": "ringkas halaman ini", "source": "phone", "createdAt": 1795495732552 } }
+{ "task": { "taskId": "...", "text": "ringkas halaman ini", "source": "phone", "createdAt": 1795495732552, "attempts": 1 } }
 ```
 
 Bila antrean kosong: `{ "task": null }`.
 
-**Keputusan polling: short poll, bukan long-poll.** Extension dianjurkan
-memanggil endpoint ini tiap **3–5 detik**. Alasannya: service worker
-Manifest V3 bisa di-suspend Chrome kapan saja, sehingga koneksi long-poll
-yang dipegang lama tidak bisa diandalkan; short poll mudah di-retry dan
-cukup untuk kasus ini. Konsekuensinya: ada latensi beberapa detik antara
-HP mengirim tugas dan extension mengambilnya — itu disengaja, bukan bug.
+**Keputusan polling: short poll, bukan long-poll — dua tingkat (v8).** Service
+worker Manifest V3 bisa di-suspend Chrome kapan saja, sehingga koneksi
+long-poll yang dipegang lama tidak bisa diandalkan; short poll mudah di-retry
+dan cukup untuk kasus ini.
+
+- **Panel samping terbuka:** side panel adalah halaman hidup, jadi ia poll
+  tiap **3 detik**. Latensi tipikal: ~3 detik + waktu eksekusi.
+- **Panel tertutup:** service worker hanya bisa mengandalkan `chrome.alarms`,
+  dan Chrome memaksakan minimum **1 menit**. Latensi tipikal: sampai ~60
+  detik + waktu eksekusi.
+- **Worker mati di tengah tugas:** lease 60 detik habis → tugas kembali ke
+  `queued` untuk percobaan berikutnya (maksimal 3 kali, lalu `expired`).
+  Tugas yang berjalan lebih dari 60 detik berisiko dijalankan dua kali —
+  skill yang dikirim saat ini (pencarian harga, read-only) aman terhadap itu;
+  jangan kirim tugas non-idempotent tanpa memikirkan ini dulu.
+
+### Lease & recovery (v8)
+
+Setiap claim memulai lease **60 detik** (`MOBIUS_BRIDGE_LEASE_MS`, hanya
+untuk tes). Sweep tiap 30 detik (`MOBIUS_BRIDGE_SWEEP_MS`, hanya untuk tes):
+
+- Tugas `running` yang lease-nya habis → kembali `queued` (`attempts` tetap
+  menghitung berapa kali sudah di-claim).
+- Setelah **3 kali claim** tanpa hasil → `expired`.
+- TTL keseluruhan **10 menit** tetap menang atas segalanya.
 
 ### `POST /bridge/tasks/:id/result` — extension mengembalikan hasil
 
@@ -149,12 +169,15 @@ Request: `{ "status": "done", "result": "ringkasan..." }` atau
 Response: `{ "taskId": "...", "status": "done" }`.
 
 Tugas yang tidak dikenal → `404`; tugas yang sudah kedaluwarsa → `410`;
-`status` selain `done`/`failed` → `400`.
+tugas yang sedang **tidak** `running` (sudah di-requeue karena lease habis,
+atau sudah selesai) → `409` — worker yang telat tidak boleh menimpa hasil
+re-run; `status` selain `done`/`failed` → `400`.
 
 ### `GET /task/:id` — HP mengecek hasil (polling)
 
-Response: `{ "taskId": "...", "status": "queued|running|done|failed|expired", "result": "..." }`
-(`result` hanya ada bila extension sudah mengembalikannya.)
+Response: `{ "taskId": "...", "status": "queued|running|done|failed|expired", "attempts": 1, "result": "..." }`
+(`result` hanya ada bila extension sudah mengembalikannya; `attempts` =
+berapa kali tugas sudah di-claim.)
 
 ## Batas keamanan & jujur (honest limits)
 
@@ -167,7 +190,8 @@ Response: `{ "taskId": "...", "status": "queued|running|done|failed|expired", "r
   ada akun/pengguna terpisah. Kalau token bocor, ganti dan restart semua.
 - **Tugas hanya di memori.** Tidak ada database, tidak ada persistensi.
   Restart server = semua tugas antrean hilang. Tugas kedaluwarsa setelah
-  **10 menit** (`status: expired`).
+  **10 menit** (`status: expired`); tugas yang di-claim tapi tidak selesai
+  dalam **60 detik** (lease) kembali ke antrean, maksimal **3 percobaan**.
 - **Latensi polling**: beberapa detik dari HP → extension (lihat di atas).
 - **Tidak ada enkripsi transport** (HTTP biasa). Ini disengaja untuk LAN
   rumah; jangan jalankan di jaringan publik/tidak dipercaya.
@@ -179,11 +203,14 @@ Response: `{ "taskId": "...", "status": "queued|running|done|failed|expired", "r
 
 ```
 1. HP     POST /task {text}            -> {accepted, taskId}
-2. Ext    GET  /bridge/tasks/next      -> {task}            (poll 3-5 dtk)
+2. Ext    GET  /bridge/tasks/next      -> {task}            (panel: poll 3 dtk;
+                                                            worker: alarm 1 mnt)
 3. Ext    kerjakan tugas di Chrome (AIRouter, dst — di luar bridge)
 4. Ext    POST /bridge/tasks/:id/result {status, result}
 5. HP     GET  /task/:id               -> {status: done, result} (poll)
 ```
+Bila langkah 3–4 tidak selesai dalam 60 detik (lease), tugas kembali ke
+antrean dan diambil lagi — maksimal 3 percobaan (lihat "Lease & recovery").
 
 Extension yang memanggil bridge harus memakai token yang sama dan
 mengirim header `X-Mobius-Token`. CORS diizinkan (`Access-Control-Allow-
@@ -193,6 +220,6 @@ extension tidak diblokir preflight.
 ## Tes
 
 Lihat `TEST-LOG.md` — 19 cek dijalankan 24 Nov 2026 (health, auth 401,
-exec diizinkan/ditolak, read/write + traversal, round-trip task lengkap).
-Semua lolos. Server tes dimatikan setelah pengujian; tidak ada server
-yang dibiarkan berjalan.
+exec diizinkan/ditolak, read/write + traversal, round-trip task lengkap),
+ditambah **8 cek lease/recovery (v8, 25 Nov 2026)**. Semua lolos. Server
+tes dimatikan setelah pengujian; tidak ada server yang dibiarkan berjalan.

@@ -368,3 +368,103 @@ batal); round-trip bridge HP → extension (tidak berubah di pass ini).
 - Terjemahan id/en dibuat di pass ini; samakan kata dengan Android v7 bila
   agen Android memilih kata berbeda.
 - Tidak ada OCR: extension tidak punya jalur upload file/foto.
+
+## 25 Nov 2026 — v8: round-trip bridge client, permission gate, lease, App Check fail-loud (audit ChatGPT)
+
+Sumber: audit ChatGPT atas repo ini (25 Nov 12:39) — 6 temuan; yang dikerjakan
+di v8: (1) round-trip client, (2) permission gate DOM, (3) App Check, (5)
+task recovery. **Keputusan Tuan 25 Nov 12:45: target remote task CUKUP
+browser + aplikasi web saja (ini cuma buat hackathon). Repo execution tools
+(repo_inspect, file_write, run_tests, build_project, dsb) DEFINITIF tidak
+dibuat — di luar scope, bukan ditunda.** Bridge `/exec` tetap allowlist
+lama (git status/log/diff/branch, ls, cat, node/npm --version, pwd).
+
+### 1. Round-trip client extension (P0) — BARU
+File baru `src/core/BridgeClient.ts`: `getBridgeSettings()` (chrome.storage,
+`mobius_settings.bridgeUrl` default `http://localhost:8787`,
+`bridgeToken` — token TIDAK PERNAH di-log, hanya dikirim sebagai header
+`X-Mobius-Token`), `pollNextTask()` (GET /bridge/tasks/next),
+`postTaskResult()` (POST /bridge/tasks/:id/result, `done`/`failed`).
+`src/ui/SettingsView.ts`: kartu baru "Laptop Bridge" (URL + token
+`type=password` + simpan; token kosong = bridge mati).
+**Desain polling (jujur, didokumentasikan di bridge/README.md + README):**
+dua tingkat, bukan klaim 3–5 detik dari worker.
+- Panel samping terbuka: `setInterval` 3 detik di `src/ui/main.ts` (halaman
+  hidup → andal). Tugas diteruskan ke worker lewat pesan `MOBIUS_TASK`
+  yang sudah ada; panel menunggu jawaban worker lalu POST hasilnya.
+- Panel tertutup: alarm `mobius-bridge-poll` di service worker, `periodInMinutes: 1`
+  (minimum chrome.alarms — tidak bisa lebih cepat). Latensi sampai ~60 detik
+  + waktu eksekusi.
+- Satu tugas dalam satu waktu per client (`bridgeBusy`); bila worker mati di
+  tengah tugas, lease bridge (60 detik, 3 percobaan) me-requeue-nya.
+- Tugas remote tanpa konteks tab: skill + chat jalan; intent yang butuh
+  halaman (summarize / wa-reply) gagal secara jujur bila tidak ada tab aktif.
+
+### 2. Permission gate DOM — BARU
+`src/core/WebSkillTools.ts`: header comment "READ-ONLY by construction"
+diperbaiki (SALAH/stale — clickText/typeText/submit memang mengubah halaman).
+`DOM_MUTATING_TOOLS = {clickText, typeText, submit}` diekspor dengan alasan
+tertulis: **navigate/back/home TIDAK di-gate** — hanya mengganti halaman yang
+ditampilkan, tidak mengubah konten atau submit apa pun; URL berasal dari JSON
+skill (author-controlled, deterministik) dan terlihat user. scroll/wait/
+waitForText/readScreen/findText/extract read-only, tidak di-gate.
+`src/core/Orchestrator.ts` `runSkill()`: bila ada step mutating dan
+`domActions` OFF → gagal SEBELUM satu pun step jalan, dengan pesan denial
+pola yang sama seperti readPage (`skillNeedsDomActions` + denialMessage).
+Skill shopee/tokopedia hanya memakai navigate/waitForText/scroll/readScreen/
+extract → tidak terpengaruh, tetap jalan. `SkillRunner.ts` GATE NOTE diperbaiki.
+
+### 3. Task recovery — lease (bridge v0.2.0)
+`bridge/bridge.mjs`: claim memulai lease 60 detik (`MOBIUS_BRIDGE_LEASE_MS`,
+knob tes) + `attempts+1`; sweep tiap 30 detik (`MOBIUS_BRIDGE_SWEEP_MS`,
+knob tes) mengembalikan tugas `running` yang lease-nya habis ke `queued`;
+setelah 3 claim tanpa hasil → `expired`; TTL 10 menit tetap menang.
+`POST result` hanya diterima bila status `running` — tugas yang sudah
+di-requeue/selesai → `409` (worker telat tidak boleh menimpa hasil re-run).
+`GET /task/:id` dan `/bridge/tasks/next` kini mengembalikan `attempts`.
+`bridge/README.md` + `bridge/TEST-LOG.md` diperbarui. LAN-only/HTTP tidak
+diubah; tidak ada port-forward; tidak ada shell bebas.
+
+### 4. App Check fail-loud — TIDAK mengarang provider
+`src/config/firebase.ts` `initAppCheck()`: debug token saja → `console.warn`
+JELAS bahwa App Check TIDAK diinisialisasi (Firebase JS SDK tidak punya
+DebugProvider publik untuk web; global debug token hanya dihormati bila App
+Check diinisialisasi dengan provider sungguhan). Tanpa token maupun key →
+`console.info` App Check OFF. Komentar header diperbaiki. README +
+`docs/PERMISSIONS.md`: klaim lama "debug token mengaktifkan App Check"
+dikoreksi; enforcement saat ini OFF di console (monitoring only) → cloud AI
+jalan tanpa App Check. Validasi Nano = device-only: checklist tes perangkat
+ditambahkan di README (Chrome 138+, RAM ≥16 GB, VRAM >4 GB, disk ≥22 GB,
+bahasa Nano EN/JA/ES/DE/FR — Indonesia belum didukung penuh); TIDAK ada klaim
+berhasil dari VM.
+
+### Build & verifikasi v8
+- `npm run build` (tsc --noEmit + vite) BERHASIL, 0 error. background.js
+  285,86 kB; content.js 72,92 kB; panel assets/index-*.js 254,12 kB.
+- **Zip:** `~/workspace/your_files/mobius-extension-dist-v8.zip` (183.275
+  byte, 12 file, struktur dist utuh).
+- Grep dist: `bridge/tasks/next` ada di background.js + panel bundle;
+  `skillNeedsDomActions` + gate ada di background.js; alarm
+  `mobius-bridge-poll` ada; `X-Mobius-Token` hanya sebagai header (3x per
+  bundle, di BridgeClient); token bridge tidak pernah di-log oleh kode kami.
+  Catatan: string `console.log("Firebase App Check debug token: ...")`
+  berasal dari SDK Firebase sendiri (@firebase/app-check), SUDAH ADA di dist
+  v7 juga — bukan dari kode v8, di luar scope (dicatat, tidak diubah).
+- **Tes bridge (25 Nov ~12:46, lihat bridge/TEST-LOG.md):** regresi alur
+  tugas asli 10 cek (health 0.2.0, 401 tanpa token, 403 rm, R13–R19) SEMUA
+  PASS; lease/recovery 8 cek (claim attempts 1, tidak dikirim dua kali,
+  requeue setelah lease → queued attempts 1, 409 untuk result telat, claim
+  ke-2 attempts 2 → queued, claim ke-3 attempts 3 → expired, 410 untuk
+  result ke expired, alur done + 409 untuk result ganda) SEMUA PASS.
+  Server tes dimatikan; tidak ada server dibiarkan jalan.
+- Tidak ada push GitHub. Tidak ada secret baru (token bridge hanya diisi
+  user di Settings laptopnya sendiri, tidak di-hardcode).
+
+### Yang belum dites live (butuh laptop + HP Tuan)
+- Round-trip sungguhan HP → bridge → extension → HP (panel terbuka ~3 dtk
+  + eksekusi; panel tertutup sampai ~60 dtk + eksekusi).
+- Lease 60 detik dengan timing produksi (tes memakai knob 2 dtk).
+- Skill Shopee/Tokopedia sungguhan lewat jalur remote (bukan hanya lokal).
+- Nano on-device di Chrome laptop Tuan (lihat checklist di README).
+- `<all_urls>` di manifest vs klaim "minimal permissions" MASIH ada
+  (dicatat sejak 24 Nov, tidak diubah — butuh keputusan Tuan).

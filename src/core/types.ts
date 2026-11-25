@@ -82,4 +82,8 @@ export interface MobiusSettings extends Partial<LocalServerSettings> {
   language?: Language;
   /** Chat-history retention, seconds. Same choices as Android: 1h / 24h / 7d. Default 24h. */
   chatRetentionSeconds?: number;
+  /** Laptop bridge URL for remote tasks from the phone, default http://localhost:8787. */
+  bridgeUrl?: string;
+  /** Laptop bridge token (same value as MOBIUS_BRIDGE_TOKEN on the bridge + Android). Never logged. */
+  bridgeToken?: string;
 }

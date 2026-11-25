@@ -1,5 +1,10 @@
 // Side Panel entry — tab router for the views (v7: + Chat tab, i18n labels,
 // live re-render when the language changes in Settings).
+// v8: also runs the bridge fast poll — while the panel is open, claim remote
+// tasks from the laptop bridge every 3 s and forward them to the service
+// worker (MOBIUS_TASK). The worker stays the only executor.
+import { BRIDGE_POLL_INTERVAL_MS } from '../config/constants';
+import { pollNextTask, postTaskResult, type BridgeTask } from '../core/BridgeClient';
 import { loadLanguage, t } from '../core/i18n';
 import { ChatView } from './ChatView';
 import { HistoryView } from './HistoryView';
@@ -80,3 +85,52 @@ void loadLanguage().then(() => {
   applyTabLabels();
   render();
 });
+
+// Bridge fast poll (v8): the panel is a live page, so setInterval is reliable
+// while it is open — unlike the service worker, which Chrome can suspend.
+// Runs even when the bridge is not configured (pollNextTask short-circuits
+// on a missing token with a storage read only, no network). One task at a
+// time; a poll failure is warned at most once a minute, not every 3 s.
+let bridgeBusy = false;
+let bridgeWarnedAt = 0;
+
+async function pollBridgeOnce(): Promise<void> {
+  if (bridgeBusy) return;
+  let task: BridgeTask | null;
+  try {
+    task = await pollNextTask();
+  } catch (e) {
+    const now = Date.now();
+    if (now - bridgeWarnedAt > 60_000) {
+      bridgeWarnedAt = now;
+      console.warn('[MOBIUS] Bridge poll failed:', e instanceof Error ? e.message : String(e));
+    }
+    return;
+  }
+  if (!task) return;
+  bridgeBusy = true;
+  try {
+    const res = (await chrome.runtime.sendMessage({
+      type: 'MOBIUS_TASK',
+      task: { id: task.taskId, intent: 'chat', input: task.text },
+    })) as { ok?: boolean; result?: { ok: boolean; text?: string; error?: string } } | undefined;
+    const result = res?.result;
+    if (result?.ok) {
+      await postTaskResult(task.taskId, 'done', result.text ?? '');
+    } else {
+      await postTaskResult(task.taskId, 'failed', result?.error ?? 'task failed (no result from worker)');
+    }
+  } catch (e) {
+    // Worker did not answer (e.g. suspended): report failure if we still can;
+    // if the bridge is gone too, its lease requeues the task anyway.
+    try {
+      await postTaskResult(task.taskId, 'failed', e instanceof Error ? e.message : String(e));
+    } catch {
+      // Nothing more we can do — the lease is the safety net.
+    }
+  } finally {
+    bridgeBusy = false;
+  }
+}
+
+setInterval(() => void pollBridgeOnce(), BRIDGE_POLL_INTERVAL_MS);
