@@ -91,6 +91,41 @@ export async function postTaskResult(taskId: string, status: 'done' | 'failed', 
 }
 
 // ---------------------------------------------------------------------------
+// Heartbeat (v9.1) — while a browser task is running, the executor extends
+// the bridge lease (60 s) so a long task is not requeued mid-flight.
+// ---------------------------------------------------------------------------
+
+/** Heartbeat cadence: every 20 s, well inside the bridge's 60 s lease. */
+export const BRIDGE_HEARTBEAT_INTERVAL_MS = 20_000;
+
+/**
+ * Extend the lease of a running task (POST /bridge/tasks/:id/heartbeat).
+ * Best-effort by design: never throws and returns false when the bridge is
+ * not configured, unreachable, or answers non-2xx (unknown task / no longer
+ * running) — a heartbeat failure must never fail the task or block posting
+ * its result. Same URL + token source as every other bridge call; the token
+ * is sent only as the X-Mobius-Token header, never logged.
+ */
+export async function postTaskHeartbeat(taskId: string): Promise<boolean> {
+  let settings: BridgeSettings;
+  try {
+    settings = await getBridgeSettings();
+  } catch {
+    return false;
+  }
+  if (!settings.token) return false;
+  try {
+    const res = await fetch(`${settings.url}/bridge/tasks/${encodeURIComponent(taskId)}/heartbeat`, {
+      method: 'POST',
+      headers: headers(settings.token),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Browser takeover (v9)
 // ---------------------------------------------------------------------------
 
@@ -121,7 +156,13 @@ export function parseBrowserTask(text: string): BrowserTaskPayload | null {
   const actions = Array.isArray(obj.actions)
     ? (obj.actions.filter((a): a is BrowserAction => typeof a === 'object' && a !== null && typeof (a as { tool?: unknown }).tool === 'string') as BrowserAction[])
     : undefined;
-  return { type, url, actions, approved: obj.approved === true };
+  // (v9.1) Single-use approval id echoed back by the phone on resubmission.
+  // Only a string of at most 128 chars counts; anything else (non-string,
+  // too long, empty) is treated as absent, so a forged/garbage id can never
+  // pass the Orchestrator's verification.
+  const approvalId =
+    typeof obj.approvalId === 'string' && obj.approvalId.length > 0 && obj.approvalId.length <= 128 ? obj.approvalId : undefined;
+  return { type, url, actions, approved: obj.approved === true, approvalId };
 }
 
 /** Convert a claimed bridge task into the MobiusTask the Orchestrator runs:
@@ -129,8 +170,10 @@ export function parseBrowserTask(text: string): BrowserTaskPayload | null {
  * attached; anything else stays the v8 chat task. */
 export function toMobiusTask(task: BridgeTask): MobiusTask {
   const browser = parseBrowserTask(task.text);
-  if (browser) return { id: task.taskId, intent: 'browser', input: task.text, browserTask: browser };
-  return { id: task.taskId, intent: 'chat', input: task.text };
+  // attempts rides along so the Orchestrator can tell a first claim (1)
+  // from a re-claim (>1) for its double-execution guard.
+  if (browser) return { id: task.taskId, intent: 'browser', input: task.text, browserTask: browser, attempts: task.attempts };
+  return { id: task.taskId, intent: 'chat', input: task.text, attempts: task.attempts };
 }
 
 /** Parse a browser task's TaskResult text back into its structured result.

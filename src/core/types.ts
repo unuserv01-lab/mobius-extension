@@ -18,6 +18,11 @@ export interface MobiusTask {
    * BridgeClient.ts). When present, the Orchestrator runs it through
    * handleBrowserTask() and never through skill match / LLM routing. */
   browserTask?: BrowserTaskPayload;
+  /** (v9.1) Claim attempt count from the bridge (1 = first claim, >1 =
+   * re-claim after a lease expiry). The Orchestrator's double-execution
+   * guard uses it: a re-claimed mutating task whose taskId is already
+   * recorded is never run twice. */
+  attempts?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -52,6 +57,11 @@ export interface BrowserTaskPayload {
   actions?: BrowserAction[];
   /** Phone-side approval for mutating actions. Absent/false = not approved. */
   approved?: boolean;
+  /** (v9.1) Single-use approval id echoed back by the phone on resubmission.
+   * Only meaningful together with approved=true; the Orchestrator verifies
+   * it against the stored approval (exact payload fingerprint, 10-min TTL,
+   * consumed on first use) and rejects anything else without running. */
+  approvalId?: string;
 }
 
 /** One executed step, as reported back to the phone. */

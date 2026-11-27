@@ -2,6 +2,7 @@
 // Owns: task intake, permission gates, context, routing, subagent lifecycle,
 // and the ONLY write path into MemoryStore (P5).
 import { DEFAULT_CHAT_RETENTION_SECONDS, DEFAULT_MEMORY_TTL_SECONDS, DEFAULT_TEMP_TTL_SECONDS, STORAGE_KEYS } from '../config/constants';
+import { BRIDGE_HEARTBEAT_INTERVAL_MS, postTaskHeartbeat } from './BridgeClient';
 import { AgentFactory } from '../agent/AgentFactory';
 import { AIRouter } from '../ai/AIRouter';
 import { ChatHistory } from './ChatHistory';
@@ -76,8 +77,14 @@ export class Orchestrator {
    * runs. The extension returns status 'awaiting_approval' with a plain
    * description of every held-back action; the phone shows its approval
    * dialog and, if the user agrees, sends a NEW task with the same
-   * type/url/actions plus approved=true. The permission gates still apply
-   * on top: approved=true with domActions OFF fails honestly.
+   * type/url/actions plus approved=true. (v9.1) approved=true alone proves
+   * nothing: the resubmission must also echo the approvalId from the hold,
+   * which the extension verifies against chrome.storage.session — same
+   * payload fingerprint, unexpired (10 min), and consumed (deleted) before
+   * execution, so one approval can never run twice. A forged or replayed
+   * approval fails with 'approval tidak valid atau sudah dipakai' and runs
+   * zero actions. The permission gates still apply on top: approved=true
+   * with domActions OFF fails honestly.
    *
    * HONESTY: a navigation that fails, an element that is not found, or a
    * read with no matches ends the run at that step with status 'failed' —
@@ -92,7 +99,23 @@ export class Orchestrator {
     const tools = new WebSkillTools();
     let collectedText = '';
 
+    // Heartbeat (best-effort): while this task runs, extend the bridge lease
+    // every 20 s so a long task is not requeued mid-flight. Stopped in
+    // finish(), i.e. as soon as the result exists (the poller posts it right
+    // after this returns). A heartbeat failure never fails the task.
+    let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+    const stopHeartbeat = (): void => {
+      if (heartbeatTimer !== undefined) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = undefined;
+      }
+    };
+    heartbeatTimer = setInterval(() => {
+      void postTaskHeartbeat(task.id);
+    }, BRIDGE_HEARTBEAT_INTERVAL_MS);
+
     const finish = async (result: BrowserTaskResult): Promise<TaskResult> => {
+      stopHeartbeat();
       const summary = `${type}${result.url ? ` — ${result.url}` : ''}: ${result.message}`;
       await this.aiRouter.log({
         taskId: task.id,
@@ -144,6 +167,25 @@ export class Orchestrator {
       }));
       const what = pendingActions.map((p) => p.description).join('; ');
       const approvalId = crypto.randomUUID();
+      // Single-use approval (v9.1, fail closed): the id is only useful
+      // because it is recorded here with the fingerprint of the exact
+      // payload. The phone's resubmission must echo this id AND the same
+      // type/url/actions; anything else is rejected without running a
+      // single action. If the record itself cannot be stored, there is no
+      // approval to honour — fail instead of handing out a useless id.
+      try {
+        await storeApproval(approvalId, computeBrowserTaskFingerprint(payload));
+      } catch {
+        return finish({
+          status: 'failed',
+          type,
+          url: payload.url ?? '',
+          title: '',
+          steps,
+          message: 'Gagal menyimpan persetujuan, coba lagi.',
+          error: 'Gagal menyimpan persetujuan, coba lagi.',
+        });
+      }
       // Plain language, no protocol jargon: the phone shows this message
       // verbatim in the approval dialog (ID+EN via i18n).
       const message = payload.url
@@ -161,6 +203,27 @@ export class Orchestrator {
       });
     }
 
+    // --- Approved resubmission (v9.1): approved=true alone proves nothing.
+    // The echoed approvalId must exist in storage.session, be unexpired,
+    // and fingerprint this exact payload. consumeApproval() deletes the
+    // entry BEFORE any execution below, so the same approval can never run
+    // twice. Any failure here runs ZERO actions: no navigation, no click,
+    // no typing — the task ends right here.
+    if (mutating.length > 0 && payload.approved === true) {
+      const ok = await consumeApproval(payload.approvalId, computeBrowserTaskFingerprint(payload));
+      if (!ok) {
+        return finish({
+          status: 'failed',
+          type,
+          url: payload.url ?? '',
+          title: '',
+          steps,
+          message: 'approval tidak valid atau sudah dipakai',
+          error: 'approval tidak valid atau sudah dipakai',
+        });
+      }
+    }
+
     // --- Permission gates (on top of approval). ---
     if (mutating.length > 0 && !(await this.permissions.isAllowed('domActions'))) {
       return fail(`domActions permission is off — ${this.permissions.denialMessage('domActions')}`);
@@ -168,6 +231,40 @@ export class Orchestrator {
     const readsPage = type === 'browser_read' || actions.some((a) => a.tool === 'readScreen' || a.tool === 'extract' || a.tool === 'findText');
     if (readsPage && !(await this.permissions.isAllowed('readPage'))) {
       return fail(`readPage permission is off — ${this.permissions.denialMessage('readPage')}`);
+    }
+
+    // --- Double-execution guard (v9.1, mutating tasks only): a re-claimed
+    // task (attempts > 1 — the bridge requeued it after a lease expiry)
+    // whose taskId is already recorded must NOT run again — the outcome of
+    // the first run is unknown. A legitimate phone resubmission is a NEW
+    // taskId, so it is never blocked by this. The record is written BEFORE
+    // any navigation or action below, so even a worker death mid-run leaves
+    // the task marked.
+    if (mutating.length > 0) {
+      try {
+        if ((task.attempts ?? 1) > 1 && (await isBrowserTaskExecuted(task.id))) {
+          return finish({
+            status: 'failed',
+            type,
+            url: payload.url ?? '',
+            title: '',
+            steps,
+            message: 'Hasil tidak diketahui, cek manual di laptop',
+            error: 'Hasil tidak diketahui, cek manual di laptop',
+          });
+        }
+        await markBrowserTaskExecuted(task.id);
+      } catch {
+        return finish({
+          status: 'failed',
+          type,
+          url: payload.url ?? '',
+          title: '',
+          steps,
+          message: 'Gagal mencatat tugas, coba lagi.',
+          error: 'Gagal mencatat tugas, coba lagi.',
+        });
+      }
     }
 
     // --- Navigate first (when a URL was given). ---
@@ -362,6 +459,172 @@ export class Orchestrator {
  * the phone MAY remember the approval. Reads never reach this function. */
 function browserActionTier(tool: string): 'moderate' | 'sensitive' {
   return tool === 'submit' ? 'sensitive' : 'moderate';
+}
+
+// ---------------------------------------------------------------------------
+// Single-use approval (v9.1) — fail closed.
+//
+// The old gate only checked payload.approved === true, and the approvalId
+// handed out with 'awaiting_approval' was never stored, so anyone holding
+// the bridge token could forge approved:true and skip the phone dialog,
+// and one approval could be replayed forever. Now:
+//
+//   - hold: the approvalId is recorded in chrome.storage.session together
+//     with a fingerprint of the EXACT payload (type+url+actions) and a
+//     10-minute expiry. Session storage — not an in-memory Map — because
+//     the MV3 worker can die mid-wait; a missing entry means "not approved".
+//   - resubmission: approved=true is only honoured when the echoed
+//     approvalId exists, has not expired, and fingerprints the same payload.
+//     The entry is DELETED before any execution, so it can never run twice.
+//     Anything else fails with 'approval tidak valid atau sudah dipakai'
+//     and runs ZERO actions (no navigation, no click, no typing).
+// ---------------------------------------------------------------------------
+
+/** chrome.storage.session key for { approvalId -> StoredApproval }. */
+export const APPROVAL_SESSION_KEY = 'mobius_browser_approvals';
+/** An approval lives for one phone round-trip: 10 minutes (the bridge TTL). */
+export const APPROVAL_TTL_MS = 10 * 60_000;
+/** chrome.storage.session key for { taskId -> executedAt } (double-run guard). */
+export const EXECUTED_TASKS_SESSION_KEY = 'mobius_executed_browser_tasks';
+/** Executed-task records older than the bridge TTL can never be re-claimed. */
+const EXECUTED_TASKS_TTL_MS = 10 * 60_000;
+
+/** One stored approval: what payload it covers, and until when. */
+export interface StoredApproval {
+  fingerprint: string;
+  expiresAt: number;
+}
+
+/**
+ * Deterministic canonical JSON: object keys sorted recursively, so the same
+ * payload stringifies identically no matter the key order in the JSON the
+ * phone sent. Arrays keep their order (action order matters). `undefined`
+ * values are dropped from objects and become null in arrays, like
+ * JSON.stringify. Pure — safe to unit-test from Node.
+ */
+export function canonicalStringify(value: unknown): string {
+  if (value === null) return 'null';
+  if (typeof value === 'number' || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => canonicalStringify(v === undefined ? null : v)).join(',')}]`;
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalStringify(v)}`).join(',')}}`;
+  }
+  return 'null';
+}
+
+/**
+ * Fingerprint of a browser-task payload: canonical string of type + url +
+ * actions ONLY. `approved` is deliberately excluded — the hold carries
+ * approved=false/absent and the resubmission approved=true for the same
+ * task, so including it would break the match. A resubmission with the same
+ * approvalId but different actions/URL fingerprints differently and fails.
+ * Pure — safe to unit-test from Node.
+ */
+export function computeBrowserTaskFingerprint(payload: { type: string; url?: string; actions?: BrowserAction[] }): string {
+  return canonicalStringify({ type: payload.type, url: payload.url ?? '', actions: payload.actions ?? [] });
+}
+
+/**
+ * Pure check: is this stored approval still usable for this fingerprint?
+ * False when the entry is missing (never stored / already consumed / worker
+ * state lost), expired, or fingerprints a different payload. Pure — safe to
+ * unit-test from Node.
+ */
+export function isApprovalEntryValid(entry: StoredApproval | undefined, fingerprint: string, now: number = Date.now()): boolean {
+  if (!entry) return false;
+  if (typeof entry.expiresAt !== 'number' || now >= entry.expiresAt) return false;
+  return entry.fingerprint === fingerprint;
+}
+
+async function readApprovalMap(): Promise<Record<string, StoredApproval>> {
+  try {
+    const data = await chrome.storage.session.get(APPROVAL_SESSION_KEY);
+    const map = data[APPROVAL_SESSION_KEY] as Record<string, StoredApproval> | undefined;
+    return map && typeof map === 'object' ? map : {};
+  } catch {
+    // Unreadable store = no approvals (fail closed: verification then fails).
+    return {};
+  }
+}
+
+async function writeApprovalMap(map: Record<string, StoredApproval>): Promise<void> {
+  await chrome.storage.session.set({ [APPROVAL_SESSION_KEY]: map });
+}
+
+/** Record a held-back approval (called before returning 'awaiting_approval'). */
+async function storeApproval(approvalId: string, fingerprint: string): Promise<void> {
+  const map = await readApprovalMap();
+  map[approvalId] = { fingerprint, expiresAt: Date.now() + APPROVAL_TTL_MS };
+  await writeApprovalMap(map);
+}
+
+/**
+ * Consume a single-use approval. Returns true only when the entry exists,
+ * has not expired, and fingerprints the exact payload — and deletes the
+ * entry BEFORE returning true, so the same approvalId can never execute
+ * twice. A fingerprint mismatch keeps the entry (the phone may still send
+ * the correct resubmission); an expired entry is pruned. Never throws:
+ * any storage failure means "not approved" (fail closed).
+ */
+async function consumeApproval(approvalId: string | undefined, fingerprint: string): Promise<boolean> {
+  if (typeof approvalId !== 'string' || approvalId.length === 0) return false;
+  try {
+    const map = await readApprovalMap();
+    const entry = map[approvalId];
+    if (!isApprovalEntryValid(entry, fingerprint)) {
+      if (entry && typeof entry.expiresAt === 'number' && Date.now() >= entry.expiresAt) {
+        delete map[approvalId];
+        await writeApprovalMap(map).catch(() => undefined);
+      }
+      return false;
+    }
+    delete map[approvalId];
+    await writeApprovalMap(map);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Double-execution guard (v9.1) — a mutating task re-claimed from the bridge
+// (attempts > 1 after a lease expiry) must never run twice: the outcome of
+// the first run is unknown, and repeating a mutation blindly (e.g. a second
+// purchase) is worse than failing honestly. Records live in
+// chrome.storage.session (same worker-death reasoning as approvals). A
+// legitimate phone resubmission is a NEW taskId, so it is never blocked.
+// ---------------------------------------------------------------------------
+
+async function readExecutedTasks(): Promise<Record<string, number>> {
+  try {
+    const data = await chrome.storage.session.get(EXECUTED_TASKS_SESSION_KEY);
+    const map = data[EXECUTED_TASKS_SESSION_KEY] as Record<string, number> | undefined;
+    return map && typeof map === 'object' ? map : {};
+  } catch {
+    return {};
+  }
+}
+
+async function isBrowserTaskExecuted(taskId: string): Promise<boolean> {
+  const map = await readExecutedTasks();
+  return typeof map[taskId] === 'number';
+}
+
+/** Record a mutating task as executed (call BEFORE any action runs). */
+async function markBrowserTaskExecuted(taskId: string): Promise<void> {
+  const map = await readExecutedTasks();
+  const now = Date.now();
+  for (const [id, at] of Object.entries(map)) {
+    if (typeof at !== 'number' || now - at > EXECUTED_TASKS_TTL_MS) delete map[id];
+  }
+  map[taskId] = now;
+  await chrome.storage.session.set({ [EXECUTED_TASKS_SESSION_KEY]: map });
 }
 
 /** Plain-language description of one action, for the approval dialog on the

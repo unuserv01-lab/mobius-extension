@@ -1,6 +1,15 @@
 # MOBIUS Permissions
 
-## Manifest permissions (kept minimal)
+## Manifest permissions (broad host access, gated by owner toggles)
+
+> **Honest note (v9.2):** these permissions are **not** minimal. The extension
+> requests `host_permissions: <all_urls>` — the broadest host permission —
+> because the bubble and DOM context must work on any page the user opens.
+> An earlier version of this document called the permissions "kept minimal";
+> that claim was wrong and has been corrected here (see "Why `<all_urls>`
+> can't be narrowed" below). What *is* kept narrow is the **actual access**:
+> page reading and cross-app DOM actions are OFF by default and only run
+> when the owner turns the capability gates on (P8, below).
 
 | Permission | Why |
 |---|---|
@@ -10,6 +19,31 @@
 | `alarms` | Periodic TTL cleanup (every 5 minutes). |
 | `sidePanel` | Dashboard: Onboarding, Router Log, Settings, History. |
 | `host_permissions: <all_urls>` | The bubble and DOM context features work on any page the user opens. Page access itself is still gated by the opt-in toggles below. |
+
+## Why `<all_urls>` can't be narrowed
+
+The host permission is deliberately broad, and narrowing it would break the
+extension's core function:
+
+- **Content script on any site.** The bubble and DOM context must run on
+  whatever page the user opens — Shopee, WhatsApp Web, Gmail, articles.
+  A fixed site list cannot cover "any page the user opens".
+- **Tasks can target a non-active tab.** Bridge tasks (up to 60 s) can arrive
+  while the side panel is closed and target a tab that is not the active one.
+  `activeTab` only covers the tab that is active when the extension is
+  invoked, and it does not cover a content script running on an arbitrary
+  page — so `activeTab` alone cannot replace `<all_urls>`.
+- **Optional host permissions would break the bridge flow.** Granting access
+  per site on demand would interrupt bridge tasks and the demo flow: a task
+  arriving for a not-yet-granted site would stall waiting for a manual grant
+  instead of running.
+
+So the broad host permission stays, and the real protection is the layer
+below it: the capability gates (P8). A wide host permission means the
+extension *can* reach a page; the gates decide whether it *may* read it or
+act on it — and by default it may not. Read Page / DOM Context is OFF and
+Cross-App DOM Actions is OFF; only the bubble overlay is ON by default, and
+even that shows nothing from the page until a gate allows it.
 
 ## Capability gates (opt-in by owner — P8)
 

@@ -210,3 +210,81 @@ label i18n, dan field token bridge di Settings — bukan di jalur browser task.)
      selesai (tidak tertutup).
   5. Ulangi dengan situs lain (mis. devpost.com) bila mau.
 - Lease 60 detik timing produksi dan TTL 10 menit penuh (sama seperti v8).
+
+---
+
+# v0.4.0 — Heartbeat + no-requeue tugas approved (26 Nov 2026, ~12:00 WIB)
+
+Node v24.22.1. Token tes: `test-token-123` (palsu, hanya untuk tes).
+Root tes: `/tmp/mobius-test-root-v10` (dihapus setelah tes). Server dimatikan
+setelah pengujian; tidak ada server yang dibiarkan berjalan.
+Perubahan yang dites: bridge v0.4.0 — endpoint baru
+`POST /bridge/tasks/:id/heartbeat` (perpanjang lease `running` sebesar
+`MOBIUS_BRIDGE_LEASE_MS`), dan sweep TIDAK PERNAH me-requeue tugas approved
+(`text` ter-parse sebagai JSON dengan `approved === true`): lease habis →
+`failed` dengan result `"Hasil tidak diketahui, cek manual di laptop"`.
+Knob tes (hanya untuk tes): `MOBIUS_BRIDGE_LEASE_MS=5000` +
+`MOBIUS_BRIDGE_SWEEP_MS=1000`, port 8787.
+
+Startup log mengonfirmasi versi + aturan baru:
+`[mobius-bridge] v0.4.0 listening on http://127.0.0.1:8787` dan
+`tasks: 10-min TTL, 60 s lease, max 3 attempts (requeue on lease expiry; approved tasks never requeue — lease expiry -> failed)`.
+`GET /health` → `{"ok":true,"version":"0.4.0",...}`.
+
+## A. Heartbeat memperpanjang lease — PASS
+
+| # | Cek | Hasil |
+| --- | --- | --- |
+| H1 | `POST /task {"text":"tugas heartbeat"}` | `accepted`, taskId `e34db103-...` |
+| H2 | `GET /bridge/tasks/next` (claim) | task, `"attempts":1` |
+| H3 | Tunggu 3 dtk → `POST /bridge/tasks/<id>/heartbeat` | `{"taskId":"...","status":"running","leaseExpiresAt":1795669228706}` (lease baru = heartbeat + 5 dtk) |
+| H4 | Tunggu 3 dtk lagi (total 6 dtk > lease awal 5 dtk) → `GET /task/<id>` | `{"status":"running","attempts":1}` — masih running, TIDAK direqueue |
+| H5 | Tunggu 6 dtk lagi (lease hasil heartbeat habis) → `GET /task/<id>` | `{"status":"queued","attempts":1}` — setelah lease baru habis, tugas biasa kembali ke antrean seperti biasa |
+
+## B. Tugas approved TIDAK direqueue — PASS
+
+| # | Cek | Hasil |
+| --- | --- | --- |
+| P1 | `POST /task` teks JSON `{"type":"browser_act","url":"https://example.com","actions":[{"tool":"clickText","text":"Beli"}],"approved":true,"approvalId":"appr-123"}` (+ field `approvalId` di POST) | `accepted`, taskId `deb63e39-...` |
+| P2 | `GET /bridge/tasks/next` (claim) | task + `"attempts":1`, `"approvalId":"appr-123"` |
+| P3 | Tunggu 7 dtk (lease 5 dtk + sweep 1 dtk) → `GET /task/<id>` | `{"status":"failed","attempts":1,"approvalId":"appr-123","result":"Hasil tidak diketahui, cek manual di laptop"}` |
+| P4 | `GET /bridge/tasks/next` | `{"task":null}` — tugas approved TIDAK kembali ke antrean |
+
+## C. Regresi tugas biasa — PASS
+
+| # | Cek | Hasil |
+| --- | --- | --- |
+| R1 | `POST /task {"text":"tugas biasa regresi"}` → claim | task, `"attempts":1` |
+| R2 | Tunggu 7 dtk → `GET /task/<id>` | `{"status":"queued","attempts":1}` — tugas biasa tetap direqueue |
+
+## D. Error cases heartbeat — semua PASS
+
+| # | Cek | Hasil |
+| --- | --- | --- |
+| E1 | Heartbeat tanpa token | `401` |
+| E2 | Heartbeat token salah | `401 {"ok":false,"error":"invalid token"}` |
+| E3 | Heartbeat unknown id | `404 {"ok":false,"error":"unknown task id"}` |
+| E4 | Heartbeat ke tugas `queued` (bukan `running`) | `409 {"ok":false,"error":"task is not running (it was requeued or already finished)"}` |
+| E5 | Heartbeat ke tugas approved yang sudah `failed` | `409` (pesan sama) |
+| E6 | Heartbeat ke tugas `done` | `409` (pesan sama) |
+
+## E. Token tidak masuk log — PASS
+
+`grep -n "console.log"` di `bridge.mjs`: hanya 6 baris log startup
+(version, root, mode, auth, tasks) — tidak satu pun mencetak nilai token.
+`grep -n "TOKEN"`: nilai token hanya dibaca dari env (`const TOKEN =
+process.env.MOBIUS_BRIDGE_TOKEN`) dan dibandingkan di `checkAuth`
+(`Buffer.from(TOKEN)`); pesan FATAL/usage hanya menyebut NAMA env var dan
+placeholder, bukan nilainya. Baris log `auth: X-Mobius-Token required ...`
+hanya menyebut nama header, bukan nilai token.
+
+Setelah `kill`, `curl /health` gagal konek — server benar-benar mati.
+
+## Yang TIDAK dites (butuh perangkat Tuan — sama seperti v6/v8/v9)
+
+- Heartbeat dari extension Chrome asli (tes di atas memakai curl; client
+  extension `BridgeClient.ts` belum memanggil endpoint ini — itu jalur agen
+  extension).
+- Lease 60 detik timing produksi dan TTL 10 menit penuh (tes memakai knob
+  5 dtk / 1 dtk; logika sweep yang sama, tapi durasi produksi belum
+  ditunggu live).

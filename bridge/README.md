@@ -59,7 +59,7 @@ invalid token`. Perbandingan token memakai `timingSafeEqual`.
 ### `GET /health` — tanpa auth
 
 ```json
-{ "ok": true, "version": "0.1.0", "time": "2026-11-24T04:48:52.255Z" }
+{ "ok": true, "version": "0.4.0", "time": "2026-11-24T04:48:52.255Z" }
 ```
 
 ### `POST /exec` — jalankan perintah (allowlist ketat)
@@ -161,6 +161,39 @@ untuk tes). Sweep tiap 30 detik (`MOBIUS_BRIDGE_SWEEP_MS`, hanya untuk tes):
   menghitung berapa kali sudah di-claim).
 - Setelah **3 kali claim** tanpa hasil → `expired`.
 - TTL keseluruhan **10 menit** tetap menang atas segalanya.
+
+### Heartbeat (v0.4.0)
+
+Extension yang masih mengerjakan tugas `running` boleh memperpanjang
+lease-nya dengan `POST /bridge/tasks/:id/heartbeat` (auth sama seperti
+endpoint bridge lain). Setiap heartbeat menggeser `leaseExpiresAt` menjadi
+**sekarang + 60 detik** (`MOBIUS_BRIDGE_LEASE_MS`, sama seperti lease awal),
+jadi tugas panjang tidak di-requeue di tengah jalan selama extension
+mengirim heartbeat berkala (mis. tiap 30 detik). Response:
+`{ "taskId": "...", "status": "running", "leaseExpiresAt": 1795... }` —
+`leaseExpiresAt` baru disertakan supaya pemanggil bisa memverifikasi
+perpanjangan itu terjadi. Tugas tidak dikenal → `404`; tugas yang sedang
+tidak `running` (sudah di-requeue, sudah selesai, atau sudah `failed`/
+`expired`) → `409` dengan pesan yang sama seperti endpoint result
+(`task is not running (it was requeued or already finished)`).
+
+### Tugas approved TIDAK PERNAH di-requeue (v0.4.0)
+
+Tugas yang `text`-nya ter-parse sebagai JSON dengan `approved === true`
+adalah pengiriman ulang dari HP setelah Tuan menyetujui aksi mutating —
+hasil eksekusinya tidak diketahui bila lease habis, dan mengulanginya
+buta-buta bisa mengulang aksi itu sendiri (mis. pembelian). Karena itu,
+bila lease tugas approved habis, sweep **TIDAK** mengembalikannya ke
+`queued`, berapa pun `attempts`-nya:
+
+- Status akhir: **`failed`**, dengan `result` =
+  `"Hasil tidak diketahui, cek manual di laptop"` (pesan yang sama dengan
+  yang dipakai extension). `claimedAt`/`leaseExpiresAt` dibersihkan.
+- Tugas itu terminal: `GET /bridge/tasks/next` tidak akan pernah
+  mengembalikannya lagi, dan HP harus menampilkan pesan itu ke Tuan supaya
+  ia mengecek manual di laptop.
+- Tugas **biasa** (teks polos atau JSON tanpa `approved: true`) tetap
+  di-requeue seperti sebelumnya, sampai 3 percobaan lalu `expired`.
 
 ### Browser takeover tasks (v9) — HP mengendalikan browser laptop
 
@@ -343,6 +376,18 @@ tugas yang sedang **tidak** `running` (sudah di-requeue karena lease habis,
 atau sudah selesai) → `409` — worker yang telat tidak boleh menimpa hasil
 re-run; `status` selain `done`/`failed` → `400`.
 
+### `POST /bridge/tasks/:id/heartbeat` — extension memperpanjang lease (v0.4.0)
+
+Extension yang masih mengerjakan tugas `running` memanggil endpoint ini
+berkala (mis. tiap 30 detik) supaya tugas panjang tidak di-requeue di
+tengah jalan. Tidak perlu body (body kosong / `{}` cukup). Setiap
+heartbeat menggeser `leaseExpiresAt` menjadi **sekarang + 60 detik**
+(`MOBIUS_BRIDGE_LEASE_MS`, sama seperti lease awal). Response:
+`{ "taskId": "...", "status": "running", "leaseExpiresAt": 1795... }`.
+Auth: header `X-Mobius-Token` yang sama seperti endpoint bridge lain.
+Tugas tidak dikenal → `404`; tugas yang sedang tidak `running` → `409`
+dengan pesan yang sama seperti endpoint result.
+
 ### `GET /task/:id` — HP mengecek hasil (polling)
 
 Response: `{ "taskId": "...", "status": "queued|running|done|failed|expired", "attempts": 1, "result": "..." }`
@@ -361,7 +406,11 @@ berapa kali tugas sudah di-claim.)
 - **Tugas hanya di memori.** Tidak ada database, tidak ada persistensi.
   Restart server = semua tugas antrean hilang. Tugas kedaluwarsa setelah
   **10 menit** (`status: expired`); tugas yang di-claim tapi tidak selesai
-  dalam **60 detik** (lease) kembali ke antrean, maksimal **3 percobaan**.
+  dalam **60 detik** (lease) kembali ke antrean, maksimal **3 percobaan** —
+  **kecuali tugas approved** (`approved: true` di dalam `text`): lease
+  habis → `failed` dengan result `"Hasil tidak diketahui, cek manual di
+  laptop"`, tidak pernah di-requeue (lihat "Tugas approved TIDAK PERNAH
+  di-requeue").
 - **Latensi polling**: beberapa detik dari HP → extension (lihat di atas).
 - **Tidak ada enkripsi transport** (HTTP biasa). Ini disengaja untuk LAN
   rumah; jangan jalankan di jaringan publik/tidak dipercaya.
@@ -397,5 +446,6 @@ extension tidak diblokir preflight.
 
 Lihat `TEST-LOG.md` — 19 cek dijalankan 24 Nov 2026 (health, auth 401,
 exec diizinkan/ditolak, read/write + traversal, round-trip task lengkap),
-ditambah **8 cek lease/recovery (v8, 25 Nov 2026)**. Semua lolos. Server
+ditambah **8 cek lease/recovery (v8, 25 Nov 2026)** dan **cek heartbeat +
+no-requeue tugas approved (v0.4.0, 26 Nov 2026)**. Semua lolos. Server
 tes dimatikan setelah pengujian; tidak ada server yang dibiarkan berjalan.

@@ -40,7 +40,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const TASK_TTL_MS = 10 * 60 * 1000; // tasks expire after 10 minutes
 // Lease (v8): a claimed task is leased, not owned forever. If the extension
 // dies mid-task (service worker suspended, laptop asleep), the lease expires
@@ -284,8 +284,28 @@ function resolveInsideRoot(p) {
 // overall 10-minute TTL still wins over everything. A late result for a
 // requeued task is rejected with 409, so a stale worker can never overwrite
 // the outcome of the re-run.
+// Heartbeat (v0.4.0): POST /bridge/tasks/:id/heartbeat extends the lease of
+// a `running` task by LEASE_MS (60 s by default) — the extension calls it
+// while it is still working, so a long task is not requeued mid-flight.
+// Approved-task rule (v0.4.0): a task whose `text` parses as JSON with
+// `approved === true` (the phone's resubmission after the user approved a
+// mutating browser action) is NEVER requeued. If its lease expires, it
+// becomes `failed` with result "Hasil tidak diketahui, cek manual di
+// laptop" — the outcome of an approved mutating action is unknown, and
+// re-running it could repeat the mutation (e.g. a purchase) blindly.
+// Plain tasks are still requeued as before, up to MAX_ATTEMPTS.
 // ---------------------------------------------------------------------------
 const tasks = new Map(); // id -> { taskId, text, source, status, result, createdAt, expiresAt, attempts, claimedAt, leaseExpiresAt, approvalId }
+// A task is "approved" when its text parses as JSON with approved === true.
+// Defensive: non-JSON text (plain chat tasks) is simply not approved.
+function isApprovedTask(t) {
+  try {
+    const parsed = JSON.parse(t.text);
+    return parsed !== null && typeof parsed === 'object' && parsed.approved === true;
+  } catch {
+    return false;
+  }
+}
 function sweepTasks() {
   const now = Date.now();
   for (const [id, t] of tasks) {
@@ -295,7 +315,15 @@ function sweepTasks() {
       continue;
     }
     if (t.status === 'running' && t.leaseExpiresAt !== null && now > t.leaseExpiresAt) {
-      if (t.attempts >= MAX_ATTEMPTS) {
+      if (isApprovedTask(t)) {
+        // Approved task, outcome unknown: NEVER requeue — re-running an
+        // approved mutating action could repeat it blindly. Terminal
+        // failure; the phone must tell the user to check manually.
+        t.status = 'failed';
+        t.result = 'Hasil tidak diketahui, cek manual di laptop';
+        t.claimedAt = null;
+        t.leaseExpiresAt = null;
+      } else if (t.attempts >= MAX_ATTEMPTS) {
         t.status = 'expired';
       } else {
         // Lease expired: back to the queue for another attempt.
@@ -509,6 +537,26 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // POST /bridge/tasks/:id/heartbeat — extension extends the lease of a
+    // task it is still working on (v0.4.0). Only a `running` task accepts a
+    // heartbeat: unknown -> 404, not running -> 409 (same message as the
+    // result endpoint, so a stale worker gets the same answer everywhere).
+    // Auth is the same checkAuth() as every other bridge endpoint (applied
+    // above, before routing). Response carries the new leaseExpiresAt so
+    // the caller can verify the extension took effect.
+    {
+      const m = pathname.match(/^\/bridge\/tasks\/([^/]+)\/heartbeat$/);
+      if (req.method === 'POST' && m) {
+        sweepTasks();
+        const t = tasks.get(decodeURIComponent(m[1]));
+        if (!t) { sendError(res, 404, 'unknown task id'); return; }
+        if (t.status !== 'running') { sendError(res, 409, 'task is not running (it was requeued or already finished)'); return; }
+        t.leaseExpiresAt = Date.now() + LEASE_MS;
+        sendJson(res, 200, { taskId: t.taskId, status: t.status, leaseExpiresAt: t.leaseExpiresAt });
+        return;
+      }
+    }
+
     // GET /task/:id — phone polls for the outcome.
     {
       const m = pathname.match(/^\/task\/([^/]+)$/);
@@ -536,5 +584,5 @@ server.listen(port, HOST, () => {
   console.log('[mobius-bridge] root: ' + ROOT);
   console.log('[mobius-bridge] mode: ' + (lan ? 'LAN (0.0.0.0 — same Wi-Fi only, NEVER port-forward)' : 'localhost only (127.0.0.1)'));
   console.log('[mobius-bridge] auth: X-Mobius-Token required on all endpoints except GET /health');
-  console.log('[mobius-bridge] tasks: 10-min TTL, 60 s lease, max 3 attempts (requeue on lease expiry)');
+  console.log('[mobius-bridge] tasks: 10-min TTL, 60 s lease, max 3 attempts (requeue on lease expiry; approved tasks never requeue — lease expiry -> failed)');
 });

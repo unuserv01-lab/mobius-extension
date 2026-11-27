@@ -736,3 +736,58 @@ Chrome asli (persetujuan di HP → tugas jalan di laptop).
   `~/workspace/your_files/mobius-extension-dist-v9.1.zip` (194.116 B, 12 file).
 - **Belum dites live:** kartu panel + dialog HP dalam bahasa Inggris (butuh laptop +
   HP Tuan, seperti v9).
+
+## v9.2 — Perbaikan klaim izin: `<all_urls>` dipertahankan, "minimal permissions" dikoreksi (28 Nov 2026 ~00:55 WIB, perintah Tuan)
+
+- **Keputusan (menyelesaikan catatan "MASIH ada" sejak 24 Nov):** `<all_urls>`
+  TETAP di `public/manifest.json` (`content_scripts.matches` +
+  `host_permissions`). Alasan: bubble + DOM context harus jalan di situs apa
+  pun yang dibuka user (Shopee, WA Web, Gmail, artikel); tugas dari bridge
+  bisa menyasar tab yang TIDAK aktif (panel tertutup, tugas sampai 60 detik)
+  — `activeTab` hanya berlaku untuk tab aktif saat ekstensi dipanggil dan
+  tidak mencakup content-script di halaman sembarang; optional host
+  permissions butuh grant per situs dan merusak alur bridge + demo.
+  Penyempitan akan merusak fungsi inti.
+- **Yang diperbaiki adalah KLAIM-nya, bukan izinnya:** kata "minimal
+  permissions" TIDAK JUJUR bila host permission-nya `<all_urls>`.
+  `docs/PERMISSIONS.md`: judul diubah menjadi "Manifest permissions (broad
+  host access, gated by owner toggles)" + catatan jujur di atas tabel +
+  bagian baru "Why `<all_urls>` can't be narrowed" (tab non-aktif, content
+  script di semua situs, optional permissions merusak alur bridge) +
+  penegasan mitigasi yang SUDAH ada: capability gates P8 di
+  `PermissionManager` (Read Page/DOM Context default OFF, Cross-App DOM
+  Actions default OFF, bubble ON) — izin host luas tapi akses nyata
+  digerbang oleh toggle pemilik. Entri BUILD-LOG lama TIDAK ditulis ulang
+  (catatan sejarah); klaim "minimal permissions"/"kept minimal" kini hanya
+  tersisa sebagai kutipan sejarah di entri lama BUILD-LOG (baris 28, 121,
+  366, 469) — grep terverifikasi, tidak ada klaim aktif tersisa di repo.
+- **Verifikasi P0 (26 Nov, 81 cek) SUDAH ada di kode lokal — tidak diubah:**
+  `approvalId` binding di `src/core/Orchestrator.ts` (UUID + fingerprint +
+  `storeApproval`/`consumeApproval` sekali pakai + TTL) dan
+  `src/core/BridgeClient.ts` (parse + echo `approvalId` ≤128 karakter);
+  lease 60 dtk + heartbeat 20 dtk di `BridgeClient.ts`/`Orchestrator.ts`
+  dan `bridge/bridge.mjs` (sweep, requeue max 3 attempts, tugas approved
+  TIDAK pernah direqueue — lease habis -> `failed`).
+- **Verifikasi:** `npm run build` (tsc + vite) 0 error (28 Nov 00:5x WIB).
+  Bundle panel `dist/assets/index-CQJci1Rj.js` (265,71 kB) — hash sama
+  seperti v9.1 (sumber tidak berubah); `dist/` hanya berisi 1 bundle panel
+  yang dirujuk `dist/src/ui/index.html`, tidak ada bundle lama/usang yang
+  perlu dihapus.
+- **Smoke test bridge:** `node bridge/test-approval-v040.mjs` (suite v0.4.0
+  yang bisa dijalankan — smoke v0.3.0 "7/7" di entri v9 adalah rangkaian
+  curl manual, tidak ada file skripnya) — **34 PASS, 0 FAIL** (heartbeat
+  perpanjang lease, tugas approved lease habis -> failed + tidak direqueue,
+  regresi requeue max 3 attempts -> expired, 409/410, auth 401). Server tes
+  dimatikan; root /tmp dihapus.
+- **Catatan push:** push ini juga membawa `bridge/bridge.mjs` v0.4.0
+  (heartbeat) + `bridge/test-approval-v040.mjs` + `scripts/test-extension-approval.mjs`
+  yang dibuat 26 Nov setelah push v9.1 dan belum pernah di-push, serta
+  `dist/` segar (JS + manifest + html; PNG tidak bisa lewat snapshot
+  push-files karena biner — pola yang sama seperti push-push sebelumnya).
+- Zip: `~/workspace/your_files/mobius-extension-dist-v9.2.zip` (dibuat dari
+  `dist/` hasil rebuild).
+- **Push GitHub:** (diisi setelah verifikasi live — commit + head baru).
+- **Belum dites live (butuh laptop + HP Tuan, tetap pending):** round-trip
+  HP→bridge→ekstensi→HP, lease 60 detik timing produksi, skill
+  Shopee/Tokopedia remote, Nano on-device, kartu v9.1 EN, baca WA Web
+  end-to-end.

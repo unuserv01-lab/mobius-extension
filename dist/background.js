@@ -58,6 +58,112 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       throw new Error(`bridge result post failed: HTTP ${res.status} ${text.slice(0, 200)}`);
     }
   }
+  const BRIDGE_HEARTBEAT_INTERVAL_MS = 2e4;
+  async function postTaskHeartbeat(taskId) {
+    let settings;
+    try {
+      settings = await getBridgeSettings();
+    } catch {
+      return false;
+    }
+    if (!settings.token) return false;
+    try {
+      const res = await fetch(`${settings.url}/bridge/tasks/${encodeURIComponent(taskId)}/heartbeat`, {
+        method: "POST",
+        headers: headers(settings.token)
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+  const BROWSER_TASK_TYPES = /* @__PURE__ */ new Set(["browser_navigate", "browser_read", "browser_act"]);
+  function parseBrowserTask(text) {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith("{")) return null;
+    let parsed;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const obj = parsed;
+    if (typeof obj.type !== "string" || !BROWSER_TASK_TYPES.has(obj.type)) return null;
+    const type = obj.type;
+    const url = typeof obj.url === "string" ? obj.url : void 0;
+    const actions = Array.isArray(obj.actions) ? obj.actions.filter((a) => typeof a === "object" && a !== null && typeof a.tool === "string") : void 0;
+    const approvalId = typeof obj.approvalId === "string" && obj.approvalId.length > 0 && obj.approvalId.length <= 128 ? obj.approvalId : void 0;
+    return { type, url, actions, approved: obj.approved === true, approvalId };
+  }
+  function toMobiusTask(task) {
+    const browser = parseBrowserTask(task.text);
+    if (browser) return { id: task.taskId, intent: "browser", input: task.text, browserTask: browser, attempts: task.attempts };
+    return { id: task.taskId, intent: "chat", input: task.text, attempts: task.attempts };
+  }
+  function parseBrowserTaskResult(text) {
+    if (!text || !text.trim().startsWith("{")) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed.status !== "done" && parsed.status !== "failed" && parsed.status !== "awaiting_approval") return null;
+      if (typeof parsed.type !== "string" || !BROWSER_TASK_TYPES.has(parsed.type)) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+  async function postOrchestratorResult(taskId, result) {
+    const browser = parseBrowserTaskResult(result.text);
+    if (browser) {
+      if (browser.status === "awaiting_approval") {
+        await announceApprovalPending(taskId, browser).catch(() => void 0);
+      } else {
+        await clearApprovalPending(taskId).catch(() => void 0);
+      }
+      await postTaskResult(taskId, browser.status === "failed" ? "failed" : "done", result.text);
+      return;
+    }
+    await postTaskResult(taskId, result.ok ? "done" : "failed", result.ok ? result.text : result.error ?? "task failed");
+  }
+  const APPROVAL_STORAGE_KEY = "mobius_bridge_approval";
+  const APPROVAL_PENDING_STALE_MS = 10 * 6e4;
+  async function announceApprovalPending(taskId, browser) {
+    const state = {
+      taskId,
+      approvalId: browser.approvalId,
+      type: browser.type,
+      url: browser.url,
+      pendingActions: browser.pendingActions ?? [],
+      at: Date.now()
+    };
+    await chrome.storage.local.set({ [APPROVAL_STORAGE_KEY]: state });
+  }
+  async function clearApprovalPending(taskId) {
+    const current = await getApprovalPending();
+    if (current && current.taskId === taskId) {
+      await chrome.storage.local.remove(APPROVAL_STORAGE_KEY);
+    }
+  }
+  async function getApprovalPending() {
+    const data = await chrome.storage.local.get(APPROVAL_STORAGE_KEY);
+    const state = data[APPROVAL_STORAGE_KEY];
+    if (!state || typeof state.at !== "number") return null;
+    if (Date.now() - state.at > APPROVAL_PENDING_STALE_MS) return null;
+    return state;
+  }
+  const TAKEOVER_STORAGE_KEY = "mobius_takeover";
+  const BRIDGE_RUNNING_STORAGE_KEY = "mobius_bridge_running";
+  async function isTakeoverActive() {
+    const data = await chrome.storage.local.get(TAKEOVER_STORAGE_KEY);
+    const state = data[TAKEOVER_STORAGE_KEY];
+    return (state == null ? void 0 : state.active) === true;
+  }
+  async function setBridgeRunning(taskId) {
+    await chrome.storage.local.set({ [BRIDGE_RUNNING_STORAGE_KEY]: { taskId, startedAt: Date.now() } });
+  }
+  async function clearBridgeRunning() {
+    await chrome.storage.local.remove(BRIDGE_RUNNING_STORAGE_KEY);
+  }
   class PromptBuilder {
     static whatsappReply(lastMessage, sender, userInstruction) {
       const instruction = userInstruction.trim() ? `User instruction for tone/style: "${userInstruction}".` : "Match the sender's tone; keep it short, natural, and friendly.";
@@ -1596,7 +1702,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   const name$8 = "@firebase/performance-compat";
   const name$7 = "@firebase/remote-config";
   const name$6 = "@firebase/remote-config-compat";
-  const name$5 = "@firebase/storage";
+  const name$5$1 = "@firebase/storage";
   const name$4$1 = "@firebase/storage-compat";
   const name$3$1 = "@firebase/firestore";
   const name$2$1 = "@firebase/ai";
@@ -1641,7 +1747,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     [name$8]: "fire-perf-compat",
     [name$7]: "fire-rc",
     [name$6]: "fire-rc-compat",
-    [name$5]: "fire-gcs",
+    [name$5$1]: "fire-gcs",
     [name$4$1]: "fire-gcs-compat",
     [name$3$1]: "fire-fst",
     [name$1$1]: "fire-fst-compat",
@@ -2277,7 +2383,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
    * limitations under the License.
    */
   registerCoreComponents("");
-  var name$4 = "@firebase/ai";
+  var name$5 = "@firebase/ai";
   var version$2 = "2.16.0";
   /**
    * @license
@@ -2580,11 +2686,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
      * see {@link https://firebase.google.com/docs/ai-logic/locations?api=vertex#available-locations | Agent Platform Gemini API locations}
      * for a list of supported locations.
      */
-    constructor(location) {
+    constructor(location2) {
       super(BackendType.VERTEX_AI);
       this.location = LEGACY_DEFAULT_LOCATION;
-      if (location) {
-        this.location = location;
+      if (location2) {
+        this.location = location2;
       }
     }
     /**
@@ -2608,11 +2714,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
      * see {@link https://firebase.google.com/docs/ai-logic/locations?api=vertex#available-locations | Agent Platform locations}
      * for a list of supported locations.
      */
-    constructor(location) {
+    constructor(location2) {
       super(BackendType.AGENT_PLATFORM);
       this.location = DEFAULT_LOCATION;
-      if (location) {
-        this.location = location;
+      if (location2) {
+        this.location = location2;
       }
     }
     /**
@@ -2669,11 +2775,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         }
         return new VertexAIBackend(vertexLocation);
       case "agentplatform":
-        const location = identifierParts[2];
-        if (!location) {
+        const location2 = identifierParts[2];
+        if (!location2) {
           throw new AIError(AIErrorCode.ERROR, `Invalid instance identifier, unknown location '${instanceIdentifier}'`);
         }
-        return new AgentPlatformBackend(location);
+        return new AgentPlatformBackend(location2);
       case "googleai":
         return new GoogleAIBackend();
       default:
@@ -4714,11 +4820,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       "PUBLIC"
       /* ComponentType.PUBLIC */
     ).setMultipleInstances(true));
-    registerVersion(name$4, version$2);
-    registerVersion(name$4, version$2, "esm2020");
+    registerVersion(name$5, version$2);
+    registerVersion(name$5, version$2, "esm2020");
   }
   registerAI();
-  var name$3 = "firebase";
+  var name$4 = "firebase";
   var version$1 = "12.19.0";
   /**
    * @license
@@ -4736,7 +4842,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
    * See the License for the specific language governing permissions and
    * limitations under the License.
    */
-  registerVersion(name$3, version$1, "app");
+  registerVersion(name$4, version$1, "app");
   /**
    * @license
    * Copyright 2020 Google LLC
@@ -5616,7 +5722,7 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       removeTokenListener: (listener) => removeTokenListener(appCheck.app, listener)
     };
   }
-  const name$2 = "@firebase/app-check";
+  const name$3 = "@firebase/app-check";
   const version = "0.13.1";
   const RECAPTCHA_ENTERPRISE_URL = "https://www.google.com/recaptcha/enterprise.js";
   function initializeEnterprise(app2, siteKey) {
@@ -5900,7 +6006,7 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       "EXPLICIT"
       /* InstantiationMode.EXPLICIT */
     ));
-    registerVersion(name$2, version);
+    registerVersion(name$3, version);
   }
   registerAppCheck();
   const FIREBASE_CONFIG = JSON.parse(
@@ -6355,7 +6461,20 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
     typePhone: "nomor HP",
     typeAccount: "nomor rekening",
     typeEmail: "email",
-    typePassword: "kata sandi"
+    typePassword: "kata sandi",
+    awaitingApproval: "Menunggu persetujuan: {what}. Tugas ini menunggu persetujuan Tuan di HP. Setelah Tuan menyetujui, laptop akan menjalankannya.",
+    awaitingApprovalAt: "Menunggu persetujuan: {what} di {url}. Tugas ini menunggu persetujuan Tuan di HP. Setelah Tuan menyetujui, laptop akan menjalankannya.",
+    actClickText: 'Klik teks "{text}"',
+    actTypeText: 'Ketik "{text}"',
+    actSubmit: "Kirim/submit formulir",
+    actNavigate: "Buka {url}",
+    actScroll: "Scroll halaman",
+    actBack: "Kembali ke halaman sebelumnya",
+    actHome: "Ke halaman utama",
+    approvalCardTitle: "Menunggu persetujuan di HP",
+    approvalCardHint: "Buka HP untuk menyetujui atau menolak. Di HP kamu bisa memilih untuk mengingat persetujuan ini.",
+    approvalCardHintSensitive: "Aksi sensitif — buka HP untuk menyetujui atau menolak. Persetujuan ini tidak bisa diingat selamanya.",
+    approvalCardAt: "di {url}"
   };
   const EN = {
     navOnboarding: "Onboarding",
@@ -6462,7 +6581,20 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
     typePhone: "phone number",
     typeAccount: "bank account number",
     typeEmail: "email",
-    typePassword: "password"
+    typePassword: "password",
+    awaitingApproval: "Waiting for approval: {what}. This task is waiting for your approval on your phone. Once you approve, the laptop will run it.",
+    awaitingApprovalAt: "Waiting for approval: {what} on {url}. This task is waiting for your approval on your phone. Once you approve, the laptop will run it.",
+    actClickText: 'Click the text "{text}"',
+    actTypeText: 'Type "{text}"',
+    actSubmit: "Submit the form",
+    actNavigate: "Open {url}",
+    actScroll: "Scroll the page",
+    actBack: "Go back to the previous page",
+    actHome: "Go to the home page",
+    approvalCardTitle: "Waiting for approval on your phone",
+    approvalCardHint: "Open your phone to approve or reject. On your phone you can choose to remember this approval.",
+    approvalCardHintSensitive: "Sensitive action — open your phone to approve or reject. This approval can never be remembered forever.",
+    approvalCardAt: "on {url}"
   };
   const STRINGS = { id: ID, en: EN };
   let cachedLang = DEFAULT_LANGUAGE;
@@ -6784,16 +6916,36 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       return null;
     }
   }
-  const description$1 = "Search Shopee (web) for a product and return the top 5 prices found on the page.";
-  const id$1 = "shopee_price_search";
+  const description$2 = "Search Shopee (web) for a product and return the top 5 prices found on the page.";
+  const id$2 = "shopee_price_search";
+  const maxSteps$2 = 12;
+  const name$2 = "Shopee price search";
+  const params$2 = [{ "name": "query", "required": true }];
+  const steps$2 = [{ "args": { "url": "https://shopee.co.id/search?keyword=$query" }, "tool": "navigate" }, { "args": { "text": "Rp", "timeoutMs": "15000" }, "onFail": "skip", "tool": "waitForText" }, { "onFail": "skip", "tool": "scroll" }, { "args": { "limit": "100" }, "storeAs": "screen", "tool": "readScreen" }, { "args": { "max": "5", "pattern": "Rp\\s?[0-9][0-9.,]*" }, "storeAs": "prices", "tool": "extract", "when": "last.success" }];
+  const summarize$2 = false;
+  const timeoutMs$2 = 6e4;
+  const triggers$2 = ["shopee", "cari harga", "cek harga", "bandingkan harga", "harga di shopee"];
+  const shopeeSkillJson = {
+    description: description$2,
+    id: id$2,
+    maxSteps: maxSteps$2,
+    name: name$2,
+    params: params$2,
+    steps: steps$2,
+    summarize: summarize$2,
+    timeoutMs: timeoutMs$2,
+    triggers: triggers$2
+  };
+  const description$1 = "Search Tokopedia (web) for a product and return the top 5 prices found on the page.";
+  const id$1 = "tokopedia_price_search";
   const maxSteps$1 = 12;
-  const name$1 = "Shopee price search";
+  const name$1 = "Tokopedia price search";
   const params$1 = [{ "name": "query", "required": true }];
-  const steps$1 = [{ "args": { "url": "https://shopee.co.id/search?keyword=$query" }, "tool": "navigate" }, { "args": { "text": "Rp", "timeoutMs": "15000" }, "onFail": "skip", "tool": "waitForText" }, { "onFail": "skip", "tool": "scroll" }, { "args": { "limit": "100" }, "storeAs": "screen", "tool": "readScreen" }, { "args": { "max": "5", "pattern": "Rp\\s?[0-9][0-9.,]*" }, "storeAs": "prices", "tool": "extract", "when": "last.success" }];
+  const steps$1 = [{ "args": { "url": "https://www.tokopedia.com/search?st=product&q=$query" }, "tool": "navigate" }, { "args": { "text": "Rp", "timeoutMs": "15000" }, "onFail": "skip", "tool": "waitForText" }, { "onFail": "skip", "tool": "scroll" }, { "args": { "limit": "100" }, "storeAs": "screen", "tool": "readScreen" }, { "args": { "max": "5", "pattern": "Rp\\s?[0-9][0-9.,]*" }, "storeAs": "prices", "tool": "extract", "when": "last.success" }];
   const summarize$1 = false;
   const timeoutMs$1 = 6e4;
-  const triggers$1 = ["shopee", "cari harga", "cek harga", "bandingkan harga", "harga di shopee"];
-  const shopeeSkillJson = {
+  const triggers$1 = ["tokopedia", "cari harga", "cek harga", "bandingkan harga", "harga di tokopedia"];
+  const tokopediaSkillJson = {
     description: description$1,
     id: id$1,
     maxSteps: maxSteps$1,
@@ -6804,16 +6956,16 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
     timeoutMs: timeoutMs$1,
     triggers: triggers$1
   };
-  const description = "Search Tokopedia (web) for a product and return the top 5 prices found on the page.";
-  const id = "tokopedia_price_search";
+  const description = "Read a WhatsApp Web chat and return a cloud-AI summary. READ-ONLY: never sends a message. Needs WhatsApp Web already linked on this laptop; opens the contact's chat, reads recent messages, summarizes via cloud Gemini (raw transcript instead when cloud AI is off or fails). The summary is stored under the 'prices' var because Orchestrator.formatSkillResult only renders that var into the result text.";
+  const id = "whatsapp_read";
   const maxSteps = 12;
-  const name = "Tokopedia price search";
-  const params = [{ "name": "query", "required": true }];
-  const steps = [{ "args": { "url": "https://www.tokopedia.com/search?st=product&q=$query" }, "tool": "navigate" }, { "args": { "text": "Rp", "timeoutMs": "15000" }, "onFail": "skip", "tool": "waitForText" }, { "onFail": "skip", "tool": "scroll" }, { "args": { "limit": "100" }, "storeAs": "screen", "tool": "readScreen" }, { "args": { "max": "5", "pattern": "Rp\\s?[0-9][0-9.,]*" }, "storeAs": "prices", "tool": "extract", "when": "last.success" }];
+  const name = "WhatsApp read";
+  const params = [{ "name": "contact", "required": true }];
+  const steps = [{ "args": {}, "tool": "whatsappOpen" }, { "args": { "contact": "$contact" }, "tool": "whatsappOpenChat" }, { "args": { "max": "30" }, "storeAs": "extract", "tool": "whatsappExtract" }, { "args": { "transcript": "$extract.transcript" }, "storeAs": "prices", "tool": "whatsappSummarize" }];
   const summarize = false;
-  const timeoutMs = 6e4;
-  const triggers = ["tokopedia", "cari harga", "cek harga", "bandingkan harga", "harga di tokopedia"];
-  const tokopediaSkillJson = {
+  const timeoutMs = 18e4;
+  const triggers = ["baca whatsapp", "baca wa", "ringkas whatsapp", "baca chat", "ringkas chat", "read chat", "summarize chat"];
+  const whatsappSkillJson = {
     description,
     id,
     maxSteps,
@@ -6827,7 +6979,7 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
   class SkillRegistry {
     constructor() {
       __publicField(this, "skills");
-      this.skills = [shopeeSkillJson, tokopediaSkillJson].map((j) => parseSkill(j)).filter((s) => s !== null);
+      this.skills = [shopeeSkillJson, tokopediaSkillJson, whatsappSkillJson].map((j) => parseSkill(j)).filter((s) => s !== null);
     }
     all() {
       return this.skills;
@@ -6939,10 +7091,21 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       return { intent: "chat", agentType: "chat", confidence: 0.6 };
     }
   }
-  const DOM_MUTATING_TOOLS = /* @__PURE__ */ new Set(["clickText", "typeText", "submit"]);
+  const DOM_MUTATING_TOOLS = /* @__PURE__ */ new Set(["clickText", "typeText", "submit", "whatsappOpenChat"]);
+  function normalizeWaContact(raw) {
+    let name2 = raw.trim();
+    for (; ; ) {
+      const next = name2.replace(/^(baca|ringkas|read|summarize|chat|pesan|whatsapp|wa|dari|dengan|with|sama|ke|kepada|buat|untuk)\s+/i, "").trim();
+      if (next === name2) break;
+      name2 = next;
+    }
+    return name2;
+  }
   class WebSkillTools {
     constructor() {
       __publicField(this, "tabId", null);
+      /** Contact name of the chat opened by whatsappOpenChat (used as the sender label for incoming messages). */
+      __publicField(this, "lastChatName", null);
     }
     async call(tool, args) {
       switch (tool) {
@@ -6971,6 +7134,14 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
           return okResult(`Waited ${args.ms ?? "1000"}ms.`);
         case "waitForText":
           return this.toTab("MOBIUS_TOOL_WAIT_FOR_TEXT", { text: args.text ?? "", timeoutMs: String(args.timeoutMs ? Number(args.timeoutMs) : 5e3) });
+        case "whatsappOpen":
+          return this.whatsappOpen();
+        case "whatsappOpenChat":
+          return this.whatsappOpenChat(args.contact ?? "");
+        case "whatsappExtract":
+          return this.whatsappExtract(args.max ? Number(args.max) : 30);
+        case "whatsappSummarize":
+          return this.whatsappSummarize(args.transcript ?? "");
         default:
           return failResult(`Unknown tool: ${tool}`);
       }
@@ -7021,6 +7192,129 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       const shown = matches.slice(0, max);
       return okResult(`Found ${matches.length} price(s): ${shown.join(", ")}`, { matches: shown.join("\n"), count: String(matches.length) });
     }
+    // ---- WhatsApp Web read skill (v9) -------------------------------------
+    //
+    // Flow: whatsappOpen (reuse the open web.whatsapp.com tab, or navigate the
+    // active tab there; verify the chat list is loaded, fail honestly when the
+    // QR/login page is showing) -> whatsappOpenChat (type the contact name in
+    // the chat-list search box, click the matching row) -> whatsappExtract
+    // (scroll the conversation pane up to load history, read up to N messages
+    // as "[time] sender: text" lines) -> whatsappSummarize (cloud AI summary,
+    // or the raw transcript with an honest note when cloud is unavailable).
+    // Nothing here ever sends a message.
+    /** Prefer an already-open WhatsApp Web tab; otherwise navigate the active tab there. Then verify login. */
+    async whatsappOpen() {
+      try {
+        const waTabs = await chrome.tabs.query({ url: "*://web.whatsapp.com/*" });
+        const existing = waTabs.find((t2) => t2.id !== void 0);
+        if ((existing == null ? void 0 : existing.id) !== void 0) {
+          this.tabId = existing.id;
+          try {
+            await chrome.tabs.update(existing.id, { active: true });
+            if (existing.windowId !== void 0) await chrome.windows.update(existing.windowId, { focused: true });
+          } catch {
+          }
+          await this.ensureTabLoaded(existing.id);
+        } else {
+          const nav = await this.navigate("https://web.whatsapp.com");
+          if (!nav.success) return nav;
+        }
+        if (this.tabId === null) return failResult("Tidak ada tab WhatsApp Web yang bisa dibuka.");
+        let state;
+        try {
+          state = await this.runInTab(this.tabId, waCheckLogin, []);
+        } catch (e) {
+          return failResult(`Tidak bisa memeriksa WhatsApp Web: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        if (!state.ok) return failResult(state.reason ?? "WhatsApp Web tidak menjawab.");
+        if (!state.loggedIn) {
+          return failResult(
+            state.reason ?? "WhatsApp Web belum tertaut / belum login di tab ini. Buka web.whatsapp.com di Chrome laptop, pindai kode QR dengan HP, lalu coba lagi."
+          );
+        }
+        return okResult("WhatsApp Web terbuka dan daftar chat termuat.");
+      } catch (e) {
+        return failResult(e instanceof Error ? e.message : String(e));
+      }
+    }
+    /** Type the contact name into the chat-list search box and open the matching chat. Mutating (click + type) — gated by domActions. */
+    async whatsappOpenChat(contact) {
+      const name2 = normalizeWaContact(contact);
+      if (!name2) return failResult('Sebutkan nama kontak — mis. "baca whatsapp Moko".');
+      if (/^(terakhir|terbaru)$/i.test(name2)) {
+        return failResult(
+          'Skill ini membaca chat dari SATU kontak yang disebut namanya — mis. "baca whatsapp Moko". Untuk pesan terakhir tanpa nama kontak, tanyakan langsung (mis. "balas pesan terakhir").'
+        );
+      }
+      if (this.tabId === null) return failResult("Tab WhatsApp Web belum dibuka — jalankan langkah whatsappOpen dulu.");
+      let res;
+      try {
+        res = await this.runInTab(this.tabId, waOpenChatInPage, [name2]);
+      } catch (e) {
+        return failResult(`Tidak bisa membuka chat di WhatsApp Web: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      if (!res.ok) return failResult(res.error ?? "Tidak bisa membuka chat.");
+      this.lastChatName = res.opened ?? name2;
+      return okResult(`Chat "${this.lastChatName}" dibuka.`, { chat: this.lastChatName });
+    }
+    /** Scroll the conversation pane up to load history, then read the newest messages. Read-only. */
+    async whatsappExtract(max) {
+      if (this.tabId === null) return failResult("Tab WhatsApp Web belum dibuka — jalankan langkah whatsappOpen dulu.");
+      const chat = this.lastChatName ?? "Kontak";
+      let res;
+      try {
+        res = await this.runInTab(this.tabId, waExtractInPage, [chat, Math.max(1, Math.min(50, max || 30))]);
+      } catch (e) {
+        return failResult(`Tidak bisa membaca pesan di WhatsApp Web: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      if (!res.ok || !res.transcript) return failResult(res.error ?? "Tidak bisa membaca pesan.");
+      return okResult(`${res.count ?? 0} pesan dari chat "${res.chat ?? chat}" dibaca.`, {
+        transcript: res.transcript,
+        count: String(res.count ?? 0),
+        chat: res.chat ?? chat
+      });
+    }
+    /**
+     * Summarize the transcript with cloud Gemini (CloudAI.generate).
+     * Cloud AI is called ONLY when the cloudAI permission is on. When it is
+     * off — or the cloud call fails — the tool still succeeds but returns the
+     * raw transcript with an honest note, so the phone gets the messages
+     * instead of a fake "summary". Never invents content.
+     */
+    async whatsappSummarize(transcript) {
+      const text = (transcript ?? "").trim();
+      if (!text) return failResult("Tidak ada transkrip untuk diringkas.");
+      const cloudAllowed = await new PermissionManager().isAllowed("cloudAI");
+      if (!cloudAllowed) {
+        const body2 = `Ringkasan cloud nonaktif — aktifkan "Izinkan Cloud AI" di Pengaturan MOBIUS untuk ringkasan otomatis. Transkrip mentah:
+${text}`;
+        return okResult(body2, { matches: body2 });
+      }
+      const prompt = `Ringkas percakapan WhatsApp berikut dalam Bahasa Indonesia.
+Aturan: hanya pakai isi percakapan di bawah, jangan tambah fakta dari luar. Format: 3-6 poin singkat; sebut siapa berkata apa bila relevan; sertakan waktu bila penting. Bila ada janji atau kesepakatan (jumlah, tanggal, bayar), tulis eksplisit. Bila percakapan tidak jelas, katakan begitu.
+
+Percakapan (format [waktu] pengirim: teks):
+${text}`;
+      const res = await CloudAI.generate(prompt);
+      if (res.ok) return okResult(res.text, { matches: res.text });
+      const body = `Ringkasan cloud gagal (${res.error}). Transkrip mentah:
+${text}`;
+      return okResult(body, { matches: body });
+    }
+    /** Run a self-contained page function in the given tab; returns its JSON-able result. */
+    async runInTab(tabId, func, args) {
+      var _a;
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func,
+        args
+      });
+      const result = (_a = results == null ? void 0 : results[0]) == null ? void 0 : _a.result;
+      if (result === void 0 || result === null) {
+        throw new Error("WhatsApp Web tidak menjawab (script tidak berjalan di tab).");
+      }
+      return result;
+    }
     async toTab(type, payload) {
       try {
         const tab = await this.activeTab();
@@ -7049,6 +7343,15 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       return tabs[0];
     }
+    async ensureTabLoaded(tabId) {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.status === "complete") return;
+      } catch {
+        return;
+      }
+      await this.waitForLoad(tabId, 2e4);
+    }
     waitForLoad(tabId, timeoutMs2) {
       return new Promise((resolve) => {
         const done = () => {
@@ -7065,6 +7368,125 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
         chrome.tabs.onUpdated.addListener(listener);
       });
     }
+  }
+  async function waCheckLogin() {
+    var _a;
+    const sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+    if (!location.hostname.includes("web.whatsapp.com")) {
+      return { ok: false, reason: "Tab ini bukan WhatsApp Web (web.whatsapp.com)." };
+    }
+    const LOGIN_TEXT = [
+      /log in to whatsapp web/i,
+      /masuk ke whatsapp web/i,
+      /use whatsapp on your computer/i,
+      /scan (the|this) qr/i,
+      /pindai kode qr/i
+    ];
+    const deadline = Date.now() + 2e4;
+    for (; ; ) {
+      if (document.querySelector('[data-testid="chat-list-search"], [data-testid="chat-list"], #pane-main')) {
+        return { ok: true, loggedIn: true };
+      }
+      const bodyText = ((_a = document.body) == null ? void 0 : _a.innerText) ?? "";
+      if (document.querySelector('[data-testid="qrcode"]') || LOGIN_TEXT.some((re) => re.test(bodyText))) {
+        return {
+          ok: true,
+          loggedIn: false,
+          reason: "WhatsApp Web belum tertaut / belum login di tab ini. Buka web.whatsapp.com di Chrome laptop, pindai kode QR dengan HP, lalu coba lagi."
+        };
+      }
+      if (Date.now() >= deadline) {
+        return {
+          ok: false,
+          reason: "WhatsApp Web tidak menunjukkan daftar chat maupun halaman login setelah 20 detik — mungkin masih memuat, atau tampilan WhatsApp Web berubah."
+        };
+      }
+      await sleep2(1e3);
+    }
+  }
+  async function waOpenChatInPage(contact) {
+    const sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+    const needle = contact.trim().toLowerCase();
+    if (!needle) return { ok: false, error: "Nama kontak kosong." };
+    const searchScope = document.querySelector('[data-testid="chat-list-search"]') ?? document;
+    const box = searchScope.querySelector('div[contenteditable="true"], input[type="text"], input') ?? document.querySelector('div[contenteditable="true"][data-tab="3"]');
+    if (!box) {
+      return { ok: false, error: "Kotak cari chat WhatsApp Web tidak ditemukan — tampilan WhatsApp Web mungkin berubah." };
+    }
+    box.click();
+    box.focus();
+    const inserted = document.execCommand("insertText", false, contact);
+    if (!inserted) box.value = contact;
+    box.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: contact }));
+    await sleep2(2e3);
+    const listRoot = document.querySelector('[data-testid="chat-list"], #pane-side') ?? document;
+    const titles = [...listRoot.querySelectorAll("span[title]")];
+    const exact = titles.find((el) => (el.getAttribute("title") ?? "").trim().toLowerCase() === needle);
+    const partial = exact ?? titles.find((el) => (el.getAttribute("title") ?? "").trim().toLowerCase().includes(needle));
+    if (!partial) {
+      return { ok: false, error: `Chat dengan "${contact}" tidak ditemukan di daftar chat WhatsApp Web. Periksa ejaan nama kontak.` };
+    }
+    const name2 = (partial.getAttribute("title") ?? contact).trim();
+    partial.click();
+    const deadline = Date.now() + 8e3;
+    for (; ; ) {
+      const header = document.querySelector('#main header [title], [data-testid="conversation-header"] [title]');
+      const headerName = ((header == null ? void 0 : header.getAttribute("title")) ?? "").trim();
+      if (headerName && headerName.toLowerCase().includes(needle)) return { ok: true, opened: headerName };
+      if (document.querySelector("#main .message-in, #main .message-out")) return { ok: true, opened: name2 };
+      if (Date.now() >= deadline) {
+        return { ok: false, error: `Chat "${name2}" diklik tapi panel percakapan tidak terbuka — tampilan WhatsApp Web mungkin berubah.` };
+      }
+      await sleep2(500);
+    }
+  }
+  async function waExtractInPage(chatName, maxMessages) {
+    var _a, _b, _c;
+    const sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+    const first = document.querySelector("#main .message-in, #main .message-out, .message-in, .message-out");
+    if (!first) return { ok: false, error: "Tidak ada pesan di chat yang terbuka." };
+    let container = null;
+    let el = first;
+    for (let i = 0; i < 12 && el; i++) {
+      if (el.scrollHeight > el.clientHeight + 20) {
+        container = el;
+        break;
+      }
+      el = el.parentElement;
+    }
+    if (container) {
+      for (let i = 0; i < 5; i++) {
+        const before = container.scrollHeight;
+        container.scrollTop = 0;
+        await sleep2(1200);
+        if (container.scrollHeight === before && container.scrollTop === 0) break;
+      }
+      container.scrollTop = container.scrollHeight;
+      await sleep2(400);
+    }
+    const scope = container ?? document;
+    const rows = [...scope.querySelectorAll(".message-in, .message-out")].slice(-Math.max(1, maxMessages));
+    const lines = [];
+    for (const row of rows) {
+      const textEl = row.querySelector('[data-testid="msg-text"], .selectable-text');
+      const text = ((textEl == null ? void 0 : textEl.textContent) ?? "").trim().replace(/\s+/g, " ");
+      const meta = (((_a = row.querySelector('[data-testid="msg-meta"]')) == null ? void 0 : _a.textContent) ?? "").trim();
+      const time = (meta.match(/\d{1,2}[.:]\d{2}/) ?? ["??:??"])[0];
+      const isOut = row.classList.contains("message-out");
+      const author = (_c = (_b = row.querySelector('[data-testid="msg-author"]')) == null ? void 0 : _b.textContent) == null ? void 0 : _c.trim();
+      const sender = isOut ? "Saya" : author || chatName || "Kontak";
+      lines.push(`[${time}] ${sender}: ${text || "[media/lampiran]"}`);
+    }
+    if (lines.length === 0) {
+      return { ok: false, error: "Pesan ditemukan tapi tidak ada teks yang bisa dibaca (mungkin hanya media)." };
+    }
+    let transcript = lines.join("\n");
+    const MAX_CHARS = 6e3;
+    while (transcript.length > MAX_CHARS && lines.length > 1) {
+      lines.shift();
+      transcript = lines.join("\n");
+    }
+    return { ok: true, count: lines.length, chat: chatName, transcript };
   }
   class Orchestrator {
     constructor() {
@@ -7089,6 +7511,9 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
     async handleTask(task) {
       await loadLanguage();
       const settings = await this.getSettings();
+      if (task.browserTask) {
+        return this.handleBrowserTask(task, settings);
+      }
       const skillMatch = this.taskRouter.matchSkill(task.input);
       if (skillMatch) {
         return this.runSkill(task, skillMatch.match.skill, skillMatch.match.score, skillMatch.params, settings);
@@ -7113,6 +7538,209 @@ Firebase CLI install instructions: https://firebase.google.com/docs/cli
         /* insertIntoPage */
         true
       );
+    }
+    /**
+     * Browser takeover (v9): run a structured task from the phone through
+     * WebSkillTools and report back a BrowserTaskResult JSON (as TaskResult
+     * text — the pollers post it verbatim to the bridge).
+     *
+     * APPROVAL PROTOCOL (fail closed): a task whose actions include a mutating
+     * tool (clickText / typeText / submit — DOM_MUTATING_TOOLS) does NOT
+     * execute AT ALL unless payload.approved === true. Not even the navigation
+     * runs. The extension returns status 'awaiting_approval' with a plain
+     * description of every held-back action; the phone shows its approval
+     * dialog and, if the user agrees, sends a NEW task with the same
+     * type/url/actions plus approved=true. (v9.1) approved=true alone proves
+     * nothing: the resubmission must also echo the approvalId from the hold,
+     * which the extension verifies against chrome.storage.session — same
+     * payload fingerprint, unexpired (10 min), and consumed (deleted) before
+     * execution, so one approval can never run twice. A forged or replayed
+     * approval fails with 'approval tidak valid atau sudah dipakai' and runs
+     * zero actions. The permission gates still apply on top: approved=true
+     * with domActions OFF fails honestly.
+     *
+     * HONESTY: a navigation that fails, an element that is not found, or a
+     * read with no matches ends the run at that step with status 'failed' —
+     * steps already done are reported, nothing is claimed that did not happen.
+     * Only short summaries (never page content) go to the router log.
+     */
+    async handleBrowserTask(task, settings) {
+      var _a, _b;
+      const started = Date.now();
+      const payload = task.browserTask;
+      const type = payload.type;
+      const steps2 = [];
+      const tools = new WebSkillTools();
+      let collectedText = "";
+      let heartbeatTimer;
+      const stopHeartbeat = () => {
+        if (heartbeatTimer !== void 0) {
+          clearInterval(heartbeatTimer);
+          heartbeatTimer = void 0;
+        }
+      };
+      heartbeatTimer = setInterval(() => {
+        void postTaskHeartbeat(task.id);
+      }, BRIDGE_HEARTBEAT_INTERVAL_MS);
+      const finish = async (result) => {
+        stopHeartbeat();
+        const summary = `${type}${result.url ? ` — ${result.url}` : ""}: ${result.message}`;
+        await this.aiRouter.log({
+          taskId: task.id,
+          taskSummary: summary.slice(0, 80),
+          engine: "skill",
+          reason: `browser ${type}, ${result.steps.length} steps, ${result.status}`,
+          latencyMs: Date.now() - started,
+          cloudAllowed: await this.permissions.isAllowed("cloudAI"),
+          payloadSummary: `browser ${type}, ${result.steps.length} steps, ${result.status}`
+        });
+        const retention = settings.chatRetentionSeconds ?? DEFAULT_CHAT_RETENTION_SECONDS;
+        await this.chatHistory.add("user", `[browser] ${summary.slice(0, 120)}`, retention);
+        await this.chatHistory.add("assistant", result.message.slice(0, 200), retention);
+        return {
+          taskId: task.id,
+          ok: result.status === "done",
+          engine: "skill",
+          text: JSON.stringify(result),
+          provenance: "Browser task (remote, via bridge)",
+          error: result.status === "failed" ? result.error : void 0
+        };
+      };
+      const fail = (error) => this.activeTabInfo().then(
+        ({ url: url2, title: title2 }) => finish({ status: "failed", type, url: url2, title: title2, steps: steps2, message: error, error })
+      );
+      if ((type === "browser_navigate" || type === "browser_read") && !payload.url) {
+        return finish({ status: "failed", type, url: "", title: "", steps: steps2, message: `${type} needs a url.`, error: `${type} needs a url.` });
+      }
+      if (type === "browser_act" && (!payload.actions || payload.actions.length === 0)) {
+        return finish({ status: "failed", type, url: payload.url ?? "", title: "", steps: steps2, message: "browser_act needs at least one action.", error: "browser_act needs at least one action." });
+      }
+      const actions = payload.actions ?? [];
+      const mutating = actions.filter((a) => DOM_MUTATING_TOOLS.has(a.tool));
+      if (mutating.length > 0 && payload.approved !== true) {
+        const pendingActions = mutating.map((a) => ({
+          tool: a.tool,
+          description: describeBrowserAction(a),
+          tier: browserActionTier(a.tool)
+        }));
+        const what = pendingActions.map((p) => p.description).join("; ");
+        const approvalId = crypto.randomUUID();
+        try {
+          await storeApproval(approvalId, computeBrowserTaskFingerprint(payload));
+        } catch {
+          return finish({
+            status: "failed",
+            type,
+            url: payload.url ?? "",
+            title: "",
+            steps: steps2,
+            message: "Gagal menyimpan persetujuan, coba lagi.",
+            error: "Gagal menyimpan persetujuan, coba lagi."
+          });
+        }
+        const message = payload.url ? tf("awaitingApprovalAt", { what, url: payload.url }) : tf("awaitingApproval", { what });
+        return finish({
+          status: "awaiting_approval",
+          type,
+          url: payload.url ?? "",
+          title: "",
+          steps: steps2,
+          pendingActions,
+          approvalId,
+          message
+        });
+      }
+      if (mutating.length > 0 && payload.approved === true) {
+        const ok = await consumeApproval(payload.approvalId, computeBrowserTaskFingerprint(payload));
+        if (!ok) {
+          return finish({
+            status: "failed",
+            type,
+            url: payload.url ?? "",
+            title: "",
+            steps: steps2,
+            message: "approval tidak valid atau sudah dipakai",
+            error: "approval tidak valid atau sudah dipakai"
+          });
+        }
+      }
+      if (mutating.length > 0 && !await this.permissions.isAllowed("domActions")) {
+        return fail(`domActions permission is off — ${this.permissions.denialMessage("domActions")}`);
+      }
+      const readsPage = type === "browser_read" || actions.some((a) => a.tool === "readScreen" || a.tool === "extract" || a.tool === "findText");
+      if (readsPage && !await this.permissions.isAllowed("readPage")) {
+        return fail(`readPage permission is off — ${this.permissions.denialMessage("readPage")}`);
+      }
+      if (mutating.length > 0) {
+        try {
+          if ((task.attempts ?? 1) > 1 && await isBrowserTaskExecuted(task.id)) {
+            return finish({
+              status: "failed",
+              type,
+              url: payload.url ?? "",
+              title: "",
+              steps: steps2,
+              message: "Hasil tidak diketahui, cek manual di laptop",
+              error: "Hasil tidak diketahui, cek manual di laptop"
+            });
+          }
+          await markBrowserTaskExecuted(task.id);
+        } catch {
+          return finish({
+            status: "failed",
+            type,
+            url: payload.url ?? "",
+            title: "",
+            steps: steps2,
+            message: "Gagal mencatat tugas, coba lagi.",
+            error: "Gagal mencatat tugas, coba lagi."
+          });
+        }
+      }
+      if (payload.url) {
+        const nav = await tools.call("navigate", { url: payload.url });
+        steps2.push({ tool: "navigate", ok: nav.success, message: nav.message });
+        if (!nav.success) return fail(`Could not open ${payload.url}: ${nav.message}`);
+      }
+      const runList = type === "browser_read" ? [{ tool: "readScreen", limit: "200" }, ...actions] : actions;
+      for (const action of runList) {
+        if (type === "browser_navigate") break;
+        const args = {};
+        for (const [k, v] of Object.entries(action)) {
+          if (k === "tool" || v === void 0) continue;
+          args[k] = String(v);
+        }
+        const out = await tools.call(action.tool, args);
+        steps2.push({ tool: action.tool, ok: out.success, message: out.message });
+        if ((_a = out.data) == null ? void 0 : _a.text) collectedText += `${out.data.text}
+`;
+        if ((_b = out.data) == null ? void 0 : _b.matches) collectedText += `${out.data.matches}
+`;
+        if (!out.success) {
+          return fail(`Step '${action.tool}' failed: ${out.message}`);
+        }
+      }
+      const { url, title } = await this.activeTabInfo();
+      const doneCount = steps2.filter((s) => s.ok).length;
+      return finish({
+        status: "done",
+        type,
+        url,
+        title,
+        steps: steps2,
+        text: collectedText ? collectedText.slice(0, 2e3) : void 0,
+        message: type === "browser_navigate" ? `Opened ${url}${title ? ` — ${title}` : ""}.` : `${type} selesai: ${doneCount}/${steps2.length} langkah OK${title ? ` — ${title}` : ""}.`
+      });
+    }
+    /** URL + title of the active tab ('' when there is no tab — never throws). */
+    async activeTabInfo() {
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = tabs[0];
+        return { url: (tab == null ? void 0 : tab.url) ?? "", title: (tab == null ? void 0 : tab.title) ?? "" };
+      } catch {
+        return { url: "", title: "" };
+      }
     }
     /** Deterministic skill run (no LLM): navigate the web, read, extract. */
     async runSkill(task, skill, score, params2, settings) {
@@ -7216,6 +7844,116 @@ ${lines.map((p) => `• ${p}`).join("\n")}`;
       return this.aiRouter;
     }
   }
+  function browserActionTier(tool) {
+    return tool === "submit" ? "sensitive" : "moderate";
+  }
+  const APPROVAL_SESSION_KEY = "mobius_browser_approvals";
+  const APPROVAL_TTL_MS = 10 * 6e4;
+  const EXECUTED_TASKS_SESSION_KEY = "mobius_executed_browser_tasks";
+  const EXECUTED_TASKS_TTL_MS = 10 * 6e4;
+  function canonicalStringify(value) {
+    if (value === null) return "null";
+    if (typeof value === "number" || typeof value === "boolean") return JSON.stringify(value);
+    if (typeof value === "string") return JSON.stringify(value);
+    if (Array.isArray(value)) {
+      return `[${value.map((v) => canonicalStringify(v === void 0 ? null : v)).join(",")}]`;
+    }
+    if (typeof value === "object") {
+      const entries = Object.entries(value).filter(([, v]) => v !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+      return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalStringify(v)}`).join(",")}}`;
+    }
+    return "null";
+  }
+  function computeBrowserTaskFingerprint(payload) {
+    return canonicalStringify({ type: payload.type, url: payload.url ?? "", actions: payload.actions ?? [] });
+  }
+  function isApprovalEntryValid(entry, fingerprint, now = Date.now()) {
+    if (!entry) return false;
+    if (typeof entry.expiresAt !== "number" || now >= entry.expiresAt) return false;
+    return entry.fingerprint === fingerprint;
+  }
+  async function readApprovalMap() {
+    try {
+      const data = await chrome.storage.session.get(APPROVAL_SESSION_KEY);
+      const map = data[APPROVAL_SESSION_KEY];
+      return map && typeof map === "object" ? map : {};
+    } catch {
+      return {};
+    }
+  }
+  async function writeApprovalMap(map) {
+    await chrome.storage.session.set({ [APPROVAL_SESSION_KEY]: map });
+  }
+  async function storeApproval(approvalId, fingerprint) {
+    const map = await readApprovalMap();
+    map[approvalId] = { fingerprint, expiresAt: Date.now() + APPROVAL_TTL_MS };
+    await writeApprovalMap(map);
+  }
+  async function consumeApproval(approvalId, fingerprint) {
+    if (typeof approvalId !== "string" || approvalId.length === 0) return false;
+    try {
+      const map = await readApprovalMap();
+      const entry = map[approvalId];
+      if (!isApprovalEntryValid(entry, fingerprint)) {
+        if (entry && typeof entry.expiresAt === "number" && Date.now() >= entry.expiresAt) {
+          delete map[approvalId];
+          await writeApprovalMap(map).catch(() => void 0);
+        }
+        return false;
+      }
+      delete map[approvalId];
+      await writeApprovalMap(map);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  async function readExecutedTasks() {
+    try {
+      const data = await chrome.storage.session.get(EXECUTED_TASKS_SESSION_KEY);
+      const map = data[EXECUTED_TASKS_SESSION_KEY];
+      return map && typeof map === "object" ? map : {};
+    } catch {
+      return {};
+    }
+  }
+  async function isBrowserTaskExecuted(taskId) {
+    const map = await readExecutedTasks();
+    return typeof map[taskId] === "number";
+  }
+  async function markBrowserTaskExecuted(taskId) {
+    const map = await readExecutedTasks();
+    const now = Date.now();
+    for (const [id2, at] of Object.entries(map)) {
+      if (typeof at !== "number" || now - at > EXECUTED_TASKS_TTL_MS) delete map[id2];
+    }
+    map[taskId] = now;
+    await chrome.storage.session.set({ [EXECUTED_TASKS_SESSION_KEY]: map });
+  }
+  function describeBrowserAction(action) {
+    const cap = (v) => {
+      const s = String(v ?? "");
+      return s.length > 80 ? `${s.slice(0, 80)}…` : s;
+    };
+    switch (action.tool) {
+      case "clickText":
+        return tf("actClickText", { text: cap(action.text) });
+      case "typeText":
+        return tf("actTypeText", { text: cap(action.text) });
+      case "submit":
+        return t("actSubmit");
+      case "navigate":
+        return tf("actNavigate", { url: cap(action.url) });
+      case "scroll":
+        return t("actScroll");
+      case "back":
+        return t("actBack");
+      case "home":
+        return t("actHome");
+      default:
+        return action.tool;
+    }
+  }
   const orchestrator = new Orchestrator();
   let bridgeBusy = false;
   void loadLanguage();
@@ -7255,6 +7993,7 @@ ${lines.map((p) => `• ${p}`).join("\n")}`;
   console.log("[MOBIUS] Core service worker started.");
   async function pollBridgeFromWorker() {
     if (bridgeBusy) return;
+    if (await isTakeoverActive()) return;
     let task;
     try {
       task = await pollNextTask();
@@ -7264,17 +8003,26 @@ ${lines.map((p) => `• ${p}`).join("\n")}`;
     }
     if (!task) return;
     bridgeBusy = true;
+    await setBridgeRunning(task.taskId).catch(() => void 0);
     try {
-      const mobiusTask = { id: task.taskId, intent: "chat", input: task.text };
+      const mobiusTask = toMobiusTask(task);
       const result = await orchestrator.handleTask(mobiusTask);
-      await postTaskResult(task.taskId, result.ok ? "done" : "failed", result.ok ? result.text : result.error ?? "task failed");
+      await postOrchestratorResult(task.taskId, result);
     } catch (e) {
       try {
-        await postTaskResult(task.taskId, "failed", e instanceof Error ? e.message : String(e));
+        await postOrchestratorResult(task.taskId, {
+          taskId: task.taskId,
+          ok: false,
+          engine: "none",
+          text: "",
+          provenance: "Failed",
+          error: e instanceof Error ? e.message : String(e)
+        });
       } catch {
       }
     } finally {
       bridgeBusy = false;
+      await clearBridgeRunning().catch(() => void 0);
     }
   }
 })();
