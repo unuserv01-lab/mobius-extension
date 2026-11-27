@@ -786,7 +786,15 @@ Chrome asli (persetujuan di HP → tugas jalan di laptop).
   push-files karena biner — pola yang sama seperti push-push sebelumnya).
 - Zip: `~/workspace/your_files/mobius-extension-dist-v9.2.zip` (dibuat dari
   `dist/` hasil rebuild).
-- **Push GitHub:** (diisi setelah verifikasi live — commit + head baru).
+- **Push GitHub:** commit `c7c877e12a81ddf5c20b8e0795e95d06c1650686` di branch
+  `main` ("MOBIUS extension v9.2: fix 'minimal permissions' claim, keep
+  `<all_urls>` with P8 gates; bridge v0.4.0 + fresh dist", 28 Nov 2026
+  01:00 WIB / 27 Nov 18:00 UTC). Verifikasi live: `list_commits` head =
+  `c7c877e1…`, `get_file_contents` memastikan `docs/PERMISSIONS.md` baru
+  (judul "broad host access" + bagian "Why `<all_urls>` can't be narrowed"),
+  `public/manifest.json` tetap `<all_urls>`, dan entri v9.2 ini ada di
+  `BUILD-LOG.md` remote. (Catatan log ini dilengkapi setelah push, lalu
+  di-push susulan sebagai commit terpisah — lihat entri di bawah.)
 - **Belum dites live (butuh laptop + HP Tuan, tetap pending):** round-trip
   HP→bridge→ekstensi→HP, lease 60 detik timing produksi, skill
   Shopee/Tokopedia remote, Nano on-device, kartu v9.1 EN, baca WA Web
